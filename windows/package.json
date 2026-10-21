@@ -1,0 +1,36 @@
+{
+  "name": "jalkapallo-laukaustilasto",
+  "productName": "Jalkapallon Laukaustilasto",
+  "version": "0.1.0",
+  "description": "Jalkapallon pelaajatilastot, sarjataulukot ja otteluohjelmat kuudelle sarjalle",
+  "author": "Teukka",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "fi.teukka.jalkapallolaukaustilasto",
+    "productName": "Jalkapallon Laukaustilasto",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["main.js", "preload.js", "renderer/**/*", "assets/**/*", "package.json"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Jalkapallon Laukaustilasto",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "artifactName": "Jalkapallon-Laukaustilasto-Setup-${version}.exe"
+  }
+}

@@ -1,0 +1,185 @@
+:root {
+  --bg: #080F12; --lift: #0E1A1E; --panel: #0F1A1E; --raised: #16252A;
+  --stroke: rgba(255, 255, 255, .08); --chalk: #E9F0EA; --muted: #879A96;
+  --amber: #FFB547; --pos: #4ADE9A; --neg: #FF6B6B; --eu: #5AA9FF;
+  --cols: minmax(220px, 1fr) 56px 96px 58px 58px 78px 78px 108px 98px 70px 66px 84px 84px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: linear-gradient(var(--lift), var(--bg)) fixed;
+  color: var(--chalk);
+  font: 13px/1.35 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  user-select: none;
+}
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 100% 0, rgba(255, 181, 71, .10), transparent 560px);
+}
+.pitch { position: fixed; inset: 0; pointer-events: none; }
+.pitch::before {
+  content: ""; position: absolute; width: 340px; height: 340px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .035); left: calc(86% - 170px); top: calc(14% - 170px);
+}
+.pitch::after {
+  content: ""; position: absolute; left: 86%; top: 0; bottom: 0; width: 2px; background: rgba(255, 255, 255, .03);
+}
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+.app { position: relative; height: 100vh; display: flex; flex-direction: column; gap: 16px; padding: 28px 28px 20px; }
+
+/* Yläosa */
+.header { display: flex; align-items: flex-start; gap: 10px; }
+.header .titles { flex: 1; }
+h1 { margin: 0 0 4px; font: 600 32px/1.15 Cambria, Georgia, "Times New Roman", serif; letter-spacing: -.2px; }
+.sub { color: var(--muted); }
+.status { text-align: right; padding-top: 8px; font-size: 12px; color: var(--amber); white-space: pre-line; }
+.status.live { color: var(--pos); }
+.ghost {
+  height: 32px; padding: 0 12px; background: var(--raised); border: 1px solid var(--stroke);
+  border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; font-weight: 500;
+}
+.ghost:hover:not(:disabled) { background: #1c2f35; }
+.ghost:disabled { opacity: .45; cursor: default; }
+.ghost.on { color: var(--amber); }
+
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  padding: 8px 14px; border-radius: 10px; background: var(--raised); border: 1px solid var(--stroke);
+  font-weight: 600; display: inline-flex; align-items: center; gap: 8px;
+}
+.chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.chip.sel { background: var(--c, var(--amber)); color: rgba(0, 0, 0, .85); border-color: transparent; }
+.chip.sel i { background: rgba(0, 0, 0, .55); }
+
+.toolbar { display: flex; align-items: center; gap: 12px; }
+.seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--raised); border: 1px solid var(--stroke); border-radius: 999px; }
+.seg button { border: 0; background: transparent; color: var(--muted); font-weight: 600; padding: 6px 14px; border-radius: 999px; }
+.seg button.sel { background: var(--amber); color: rgba(0, 0, 0, .85); }
+.err { color: var(--neg); font-size: 12px; }
+
+/* Suodattimet */
+.filters { display: flex; align-items: center; gap: 10px; }
+.field {
+  height: 32px; padding: 0 10px; background: var(--raised); border: 1px solid var(--stroke); border-radius: 8px; outline: none;
+}
+.field:focus { border-color: rgba(255, 181, 71, .6); }
+input.field { width: 290px; user-select: text; }
+select.field { color-scheme: dark; }
+.count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.banner {
+  display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 10px;
+  background: rgba(255, 181, 71, .08); border: 1px solid rgba(255, 181, 71, .25); color: var(--muted); font-size: 12px;
+}
+.banner b { color: var(--amber); }
+
+/* Taulukko */
+.panel {
+  background: rgba(15, 26, 30, .92); border: 1px solid var(--stroke); border-radius: 14px;
+  overflow: hidden; display: flex; flex-direction: column; min-height: 0; flex: 1;
+}
+.head, .row { display: grid; grid-template-columns: var(--cols); align-items: center; padding: 0 16px; }
+.head { border-bottom: 1px solid var(--stroke); }
+.hcell {
+  height: 42px; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 600;
+  text-align: center; white-space: pre-line; line-height: 1.15; padding: 0 2px;
+}
+.hcell.left { text-align: left; }
+.hcell.hot { color: var(--amber); }
+.hcell:disabled { cursor: default; }
+.scroll { overflow-y: auto; flex: 1; min-height: 0; }
+.scroll::-webkit-scrollbar { width: 10px; }
+.scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .12); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+.row { height: 52px; border-bottom: 1px solid var(--stroke); }
+.row:hover { background: rgba(255, 255, 255, .04); }
+.cell { text-align: center; }
+.cell.player { display: flex; align-items: center; gap: 10px; min-width: 0; text-align: left; }
+.pname { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.psub { color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 6px; }
+.psub i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); display: inline-block; }
+.num { font-size: 14px; font-weight: 500; }
+.num.hot { color: var(--amber); font-weight: 700; }
+.muted { color: var(--muted); }
+.sm { font-size: 12px; }
+.empty { display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; min-height: 220px; color: var(--muted); }
+.empty b { color: var(--chalk); font-size: 14px; }
+
+.flag { display: inline-flex; align-items: center; justify-content: center; }
+.flag img { width: 22px; height: 16px; border-radius: 2px; object-fit: cover; }
+.flag .code { display: none; font-size: 11px; font-weight: 700; color: var(--muted); }
+.flag.fallback img { display: none; }
+.flag.fallback .code { display: inline; }
+
+.mix { display: inline-flex; width: 64px; height: 6px; border-radius: 999px; overflow: hidden; background: transparent; vertical-align: middle; }
+.mix span:nth-child(1) { background: var(--amber); }
+.mix span:nth-child(2) { background: rgba(255, 181, 71, .35); }
+.mix span:nth-child(3) { background: rgba(233, 240, 234, .2); }
+
+.stars { display: inline-flex; gap: 2px; }
+.stars button { border: 0; background: transparent; padding: 0; font-size: 15px; line-height: 1; color: rgba(135, 154, 150, .5); }
+.stars button.on { color: var(--amber); }
+
+/* Joukkueen merkki */
+.badge {
+  width: var(--s); height: var(--s); border-radius: 50%; flex: none; position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: hsl(var(--h) 45% 32%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
+}
+.badge .mono { font: 700 calc(var(--s) * .34) "Segoe UI", sans-serif; letter-spacing: .2px; }
+.badge img { position: absolute; inset: 12%; width: 76%; height: 76%; object-fit: contain; display: none; }
+.badge.logo { background: rgba(255, 255, 255, .10); box-shadow: none; }
+.badge.logo .mono { display: none; }
+.badge.logo img { display: block; }
+
+/* Sarjataulukko */
+.st-title, .fx-title { font: 600 20px Cambria, Georgia, serif; display: flex; align-items: baseline; gap: 8px; }
+.st-title small, .fx-title small { font: 400 12px "Segoe UI", sans-serif; color: var(--muted); }
+.st-cols { grid-template-columns: 40px minmax(180px, 1fr) 44px 44px 44px 44px 80px 54px 58px 120px; }
+.st-row { position: relative; height: 46px; }
+.st-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--z, transparent); }
+.st-row .pos { font-weight: 600; text-align: center; }
+.st-row .team { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; min-width: 0; }
+.st-row .pts { color: var(--amber); font-weight: 700; font-size: 15px; }
+.gd.pos { color: var(--pos); } .gd.neg { color: var(--neg); } .gd.zero { color: var(--muted); }
+.form { display: inline-flex; gap: 4px; justify-content: center; }
+.form i { width: 9px; height: 9px; border-radius: 50%; background: rgba(135, 154, 150, .6); }
+.form i.W { background: var(--pos); } .form i.L { background: var(--neg); }
+.legend { display: flex; gap: 18px; color: var(--muted); font-size: 11px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 3px; height: 12px; border-radius: 1px; }
+
+/* Otteluohjelma */
+.fx-nav { display: flex; align-items: center; gap: 10px; }
+.fx-nav .grow { flex: 1; }
+.fx-nav b { min-width: 84px; text-align: center; }
+.fx-scroll { overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 18px; max-width: 860px; }
+.fx-day { color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.fx-group { background: rgba(15, 26, 30, .92); border: 1px solid var(--stroke); border-radius: 14px; overflow: hidden; }
+.fx-row { display: grid; grid-template-columns: 1fr 90px 1fr; gap: 12px; align-items: center; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--stroke); }
+.fx-row:last-child { border-bottom: 0; }
+.fx-team { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; min-width: 0; }
+.fx-team.home { justify-content: flex-end; }
+.fx-mid { height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700; font-size: 16px; background: var(--raised); }
+.fx-mid.sched { background: transparent; border: 1px solid rgba(255, 181, 71, .35); color: var(--amber); font-size: 14px; font-weight: 600; }
+.fx-mid.live { color: var(--neg); }
+.fx-mid.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--neg); }
+
+/* Asetukset */
+.modal-bg { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.modal { width: 540px; max-height: 92vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--stroke); border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 16px; user-select: text; }
+.modal h2 { margin: 0; font: 600 24px Cambria, Georgia, serif; }
+.modal h3 { margin: 0 0 6px; font-size: 13px; }
+.modal hr { border: 0; border-top: 1px solid var(--stroke); width: 100%; margin: 0; }
+.modal .field { width: 100%; }
+.hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.msg { color: var(--amber); font-size: 12px; margin-top: 6px; }
+.icons { display: flex; gap: 14px; }
+.icon-pick { background: transparent; border: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; padding: 0; }
+.icon-pick img { width: 72px; height: 72px; padding: 6px; border-radius: 16px; border: 2px solid transparent; }
+.icon-pick.sel { color: var(--amber); }
+.icon-pick.sel img { border-color: var(--amber); }
+.modal .foot { display: flex; justify-content: flex-end; }
