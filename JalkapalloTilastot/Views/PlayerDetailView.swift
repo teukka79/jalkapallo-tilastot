@@ -37,7 +37,7 @@ struct PlayerDetailView: View {
         VStack(spacing: 0) {
             header
             Divider().overlay(Theme.stroke)
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(spacing: 16) {
                     tiles
                     shotSection

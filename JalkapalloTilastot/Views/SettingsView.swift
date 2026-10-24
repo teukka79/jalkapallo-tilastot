@@ -31,7 +31,7 @@ struct SettingsView: View {
         @Bindable var store = store
 
         VStack(spacing: 0) {
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("Asetukset").font(Theme.title(24)).foregroundStyle(Theme.chalk)
 

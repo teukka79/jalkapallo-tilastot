@@ -47,7 +47,7 @@ struct FixturesView: View {
                     .frame(maxWidth: .infinity, minHeight: 200)
                     .panel()
             } else {
-                ScrollView {
+                ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(visibleGroups) { group in
                             VStack(alignment: .leading, spacing: 8) {

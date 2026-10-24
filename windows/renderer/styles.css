@@ -297,3 +297,15 @@ select.field { color-scheme: dark; }
 .shotmap .sd { fill: var(--c); fill-opacity: .55; stroke: var(--c); stroke-width: 1.5; }
 .shotmap .sd.goal { fill-opacity: .9; stroke: #fff; stroke-width: 2; }
 .shotmap .sd:hover { fill-opacity: 1; }
+
+/* Vierityspalkit piiloon kaikkialla, vieritys toimii silti */
+::-webkit-scrollbar { display: none; }
+
+/* Sama tausta kuin macOS:n PitchBackground: gradientti, valonheitin oikealla ylhäällä, keskipiste ja keskiviiva */
+.modal {
+  background:
+    radial-gradient(circle at 86% 14%, transparent 168px, rgba(255, 255, 255, .035) 168px, rgba(255, 255, 255, .035) 170px, transparent 170px),
+    linear-gradient(90deg, transparent calc(86% - 1px), rgba(255, 255, 255, .03) calc(86% - 1px), rgba(255, 255, 255, .03) calc(86% + 1px), transparent calc(86% + 1px)),
+    radial-gradient(circle at 100% 0, rgba(255, 181, 71, .10), transparent 560px),
+    linear-gradient(var(--lift), var(--bg));
+}

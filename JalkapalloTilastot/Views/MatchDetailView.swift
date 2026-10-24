@@ -163,7 +163,7 @@ struct MatchDetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let stats {
             let values = stats.values(for: period)
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(spacing: 14) {
                     if !goals.isEmpty { goalsPanel }
                     ForEach(StatGroup.all) { group in

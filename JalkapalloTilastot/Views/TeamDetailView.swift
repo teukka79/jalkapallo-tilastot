@@ -60,7 +60,7 @@ struct TeamDetailView: View {
                     .frame(maxWidth: .infinity, minHeight: 160)
                     .panel()
             } else {
-                ScrollView {
+                ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
                         ForEach(shown.reversed()) { game in gameRow(game) }
                     }

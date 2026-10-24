@@ -51,7 +51,7 @@ struct PlayersView: View {
                     emptyState
                 } else {
                     // Otsikko on osa vieritettävää aluetta, jotta sarakkeet pysyvät kohdillaan vierityspalkin kanssa
-                    ScrollView {
+                    ScrollView(showsIndicators: false) {
                         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                             Section {
                                 ForEach(rows) { player in
