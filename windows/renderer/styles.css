@@ -278,3 +278,22 @@ select.field { color-scheme: dark; }
 .psub .flag .code { font-size: 9px; }
 
 .warn { color: var(--amber); }
+
+.cell.player.open { cursor: pointer; }
+.modal.player { width: 680px; gap: 14px; }
+.pm-head { display: flex; align-items: center; gap: 14px; }
+.pm-head h2 { font-size: 22px; }
+.pm-head .sub { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.pm-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.pm-stat { background: var(--panel); border: 1px solid var(--stroke); border-radius: 10px; padding: 8px 6px; text-align: center; }
+.pm-stat b { display: block; font-size: 18px; }
+.pm-stat small { color: var(--muted); font-size: 10.5px; }
+.pm-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.pm-map { background: #0B1A14; border: 1px solid var(--stroke); border-radius: 12px; padding: 6px; }
+.pitch { width: 100%; height: auto; display: block; }
+.pitch .plines * { fill: none; stroke: rgba(233, 240, 234, .32); stroke-width: 1.4; }
+.pitch .plines .goalpost { stroke: rgba(233, 240, 234, .6); }
+.pitch .plines .spot { fill: rgba(233, 240, 234, .5); stroke: none; }
+.pitch .sd { fill: var(--c); fill-opacity: .55; stroke: var(--c); stroke-width: 1.5; }
+.pitch .sd.goal { fill-opacity: .9; stroke: #fff; stroke-width: 2; }
+.pitch .sd:hover { fill-opacity: 1; }

@@ -32,7 +32,7 @@ const leagueOf = (code) => LEAGUES.find((l) => l.code === code);
 const S = {
   league: null, section: 'players',
   players: [], playersSource: 'none', playersUpdated: null, playersPartial: false, updatingPlayers: false, playersStatus: '', playersNote: '', nationalities: {}, enriching: false,
-  matches: {}, standings: {}, crests: {}, live: {}, updatedAt: {},
+  matches: {}, standings: {}, crests: {}, crestsBy: {}, playerModal: null, live: {}, updatedAt: {},
   today: [], todayLive: {}, todayUpdated: null, loadingToday: false,
   loading: false, error: null,
   ratings: {}, apiKey: '', oddsKey: '', oddsRemaining: null, oddsError: '', odds: {}, icon: 'night',
@@ -116,8 +116,27 @@ function related(a, b) {
   return sub(x, y) || sub(y, x);
 }
 
-function badge(name, size = 28) {
-  const url = S.crests[name] || S.crests[tkey(name)];
+// Logot tallennetaan nimellä, normalisoidulla nimellä ja sarjakohtaisesti: Understatin "Brighton" löytää ESPN:n "Brighton & Hove Albion" -logon.
+const crestCache = new Map();
+function setCrest(name, url, code) {
+  if (!url || !name) return;
+  S.crests[name] = url; S.crests[tkey(name)] = url;
+  if (code) (S.crestsBy[code] = S.crestsBy[code] || {})[tkey(name)] = url;
+  crestCache.clear();
+}
+function crestFor(name, code) {
+  const direct = S.crests[name] || S.crests[tkey(name)];
+  if (direct || !code || !S.crestsBy[code]) return direct;
+  const ck = code + '|' + name;
+  if (crestCache.has(ck)) return crestCache.get(ck);
+  const tk = tkey(name);
+  const hit = Object.entries(S.crestsBy[code]).find(([k]) => related(k, tk));
+  crestCache.set(ck, hit ? hit[1] : undefined);
+  return hit ? hit[1] : undefined;
+}
+
+function badge(name, size = 28, code) {
+  const url = crestFor(name, code);
   return `<span class="badge" style="--s:${size}px;--h:${hue(name)}"><span class="mono">${esc(initials(name))}</span>${url ? `<img src="${esc(url)}" alt="">` : ''}</span>`;
 }
 
@@ -161,8 +180,8 @@ async function fdGet(path) {
 const tname = (t) => t.shortName || t.name;
 
 function fdMatch(m, code) {
-  if (m.homeTeam.crest) S.crests[tname(m.homeTeam)] = m.homeTeam.crest;
-  if (m.awayTeam.crest) S.crests[tname(m.awayTeam)] = m.awayTeam.crest;
+  setCrest(tname(m.homeTeam), m.homeTeam.crest, code);
+  setCrest(tname(m.awayTeam), m.awayTeam.crest, code);
   const status = ['FINISHED', 'AWARDED'].includes(m.status) ? 'finished'
     : ['IN_PLAY', 'PAUSED'].includes(m.status) ? 'live' : 'scheduled';
   const ht = (m.score && m.score.halfTime) || {};
@@ -182,7 +201,7 @@ async function fdLeague(code) {
   const groups = st.standings || [];
   const group = groups.find((g) => g.type === 'TOTAL') || groups[0];
   const rows = (group ? group.table : []).map((r) => {
-    if (r.team.crest) S.crests[tname(r.team)] = r.team.crest;
+    setCrest(tname(r.team), r.team.crest, code);
     return {
       position: r.position, team: tname(r.team), played: r.playedGames, won: r.won, drawn: r.draw, lost: r.lost,
       goalsFor: r.goalsFor, goalsAgainst: r.goalsAgainst, points: r.points, form: []
@@ -228,7 +247,7 @@ async function espnStandings(lg) {
     parsed.sort((a, b) => (a.values.rank || 0) - (b.values.rank || 0));
   }
   return parsed.map((p, i) => {
-    if (p.logo) S.crests[p.team] = p.logo;
+    setCrest(p.team, p.logo, lg.code);
     return {
       position: i + 1, team: p.team, played: n(p, 'gamesPlayed'), won: n(p, 'wins'), drawn: n(p, 'ties'), lost: n(p, 'losses'),
       goalsFor: n(p, 'pointsFor'), goalsAgainst: n(p, 'pointsAgainst'), points: n(p, 'points'), form: []
@@ -244,8 +263,8 @@ function espnEvent(ev, lg) {
   if (!home || !away || !home.team.displayName || !away.team.displayName) return null;
   const date = new Date(ev.date);
   if (Number.isNaN(date.getTime())) return null;
-  if (home.team.logo) S.crests[home.team.displayName] = home.team.logo;
-  if (away.team.logo) S.crests[away.team.displayName] = away.team.logo;
+  setCrest(home.team.displayName, home.team.logo, lg.code);
+  setCrest(away.team.displayName, away.team.logo, lg.code);
   const state = (ev.status && ev.status.type && ev.status.type.state) || 'pre';
   const status = state === 'post' ? 'finished' : state === 'in' ? 'live' : 'scheduled';
   const played = status !== 'scheduled';
@@ -508,6 +527,90 @@ async function updatePlayers() {
   if (lost.size) S.playersNote = `Osa sarjoista jäi päivittämättä: ${failed.map((f) => `${f.league} (${f.error})`).join(', ')}. Yritetään uudelleen seuraavalla päivityksellä.`;
   render();
   enrichNationalities();
+  if (S.playerModal) openPlayer(S.playerModal.id);
+}
+
+// Pelaajalistan joukkueiden logot: haetaan sarjataulukot (ESPN, ei avainta) taustalla, jotta logot löytyvät myös ennen sarjan avaamista
+const crestTried = new Set();
+async function ensureCrests() {
+  let changed = false;
+  for (const lg of LEAGUES.filter((l) => l.stats)) {
+    if (crestTried.has(lg.code) || S.crestsBy[lg.code]) continue;
+    crestTried.add(lg.code);
+    try { await espnStandings(lg); changed = true; } catch { /* logot jäävät nimikirjaimiksi */ }
+  }
+  if (changed) render();
+}
+
+// ---------- pelaajan laukauskartta ----------
+
+const SHOT_RES = { G: ['Maali', '#FFB547'], S: ['Torjuttu', '#4ADE9A'], P: ['Tolppa', '#B48CFF'], M: ['Ohi', '#879A96'], B: ['Blokattu', '#FF6B6B'] };
+const SHOT_SIT = { O: 'Avopeli', C: 'Kulma', S: 'Vakiotilanne', F: 'Vapaapotku', P: 'Rangaistus' };
+const BOX_X = (105 - 16.5) / 105, BOX_Y_MIN = (68 - 40.32) / 2 / 68, BOX_Y_MAX = 1 - BOX_Y_MIN;
+const outsideBox = (sh) => !(sh[0] >= BOX_X && sh[1] >= BOX_Y_MIN && sh[1] <= BOX_Y_MAX);
+
+async function openPlayer(id) {
+  if (!S.players.some((p) => p.id === id)) return;
+  S.playerModal = { id, state: 'loading', shots: [], available: false, result: 'all', sit: 'all' };
+  render();
+  let r;
+  try { r = await window.api.playerShots(id); } catch { r = { available: false, shots: [] }; }
+  if (!S.playerModal || S.playerModal.id !== id) return;
+  S.playerModal.state = 'ok'; S.playerModal.shots = r.shots || []; S.playerModal.available = !!r.available;
+  render();
+}
+
+function shotMapSvg(shots) {
+  const K = 8, W = 68 * K, H = 52.5 * K;
+  const boxW = 40.32 * K, six = 18.32 * K, goal = 7.32 * K, r = 9.15 * K, spotY = 11 * K, boxH = 16.5 * K;
+  const dx = Math.sqrt(r * r - (boxH - spotY) ** 2);
+  const lines = `<rect x="0" y="0" width="${W}" height="${H}"/>
+    <rect x="${(W - boxW) / 2}" y="0" width="${boxW}" height="${boxH}"/>
+    <rect x="${(W - six) / 2}" y="0" width="${six}" height="${5.5 * K}"/>
+    <rect x="${(W - goal) / 2}" y="-8" width="${goal}" height="8" class="goalpost"/>
+    <path d="M ${W / 2 - dx} ${boxH} A ${r} ${r} 0 0 0 ${W / 2 + dx} ${boxH}"/>
+    <path d="M ${W / 2 - r} ${H} A ${r} ${r} 0 0 1 ${W / 2 + r} ${H}"/>
+    <circle cx="${W / 2}" cy="${spotY}" r="2.5" class="spot"/>`;
+  const dots = [...shots].sort((a, b) => b[2] - a[2]).map((sh) => {
+    const cx = Math.max(0, Math.min(W, sh[1] * W)), cy = Math.max(0, Math.min(H - 4, (1 - sh[0]) * 105 * K));
+    const rad = 4.5 + Math.sqrt(Math.max(0, sh[2])) * 16;
+    const info = SHOT_RES[sh[4]] || SHOT_RES.M;
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" class="sd ${sh[4] === 'G' ? 'goal' : ''}" style="--c:${info[1]}"><title>${sh[3]}' · ${info[0]} · xG ${sh[2].toFixed(2)} · ${SHOT_SIT[sh[5]] || 'Avopeli'}</title></circle>`;
+  }).join('');
+  return `<svg class="pitch" viewBox="-14 -22 ${W + 28} ${H + 36}" role="img" aria-label="Laukauskartta"><g class="plines">${lines}</g>${dots}</svg>`;
+}
+
+function playerModalView() {
+  const pm = S.playerModal;
+  const p = S.players.find((x) => x.id === pm.id);
+  if (!p) return '';
+  const lg = leagueOf(p.league);
+  const all = pm.shots;
+  const vis = all.filter((sh) => (pm.result === 'all' || sh[4] === pm.result) && (pm.sit === 'all' || sh[5] === pm.sit));
+  let body;
+  if (pm.state === 'loading') body = '<div class="empty"><b>Haetaan laukauksia…</b></div>';
+  else if (!pm.available) body = `<div class="empty"><b>Laukauskartan tiedot puuttuvat</b>
+    <span>Laukaukset haetaan Understatista pelaajadatan päivityksen yhteydessä (ensimmäinen haku kestää hetken).</span>
+    <button class="ghost" data-act="updplayers" ${S.updatingPlayers ? 'disabled' : ''}>${S.updatingPlayers ? 'Haetaan…' : '⟳ Päivitä pelaajadata'}</button>
+    ${S.updatingPlayers ? `<span data-pstatus>${esc(S.playersStatus)}</span>` : ''}</div>`;
+  else if (!all.length) body = '<div class="empty"><b>Ei laukauksia tällä kaudella</b></div>';
+  else {
+    const goals = all.filter((sh) => sh[4] === 'G').length, on = all.filter((sh) => sh[4] === 'G' || sh[4] === 'S').length;
+    const xg = all.reduce((a, sh) => a + sh[2], 0), out = all.filter(outsideBox).length;
+    const stat = (v, l) => `<div class="pm-stat"><b>${v}</b><small>${l}</small></div>`;
+    const resChip = (k, label, color, n) => `<button class="chip ${pm.result === k ? 'sel' : ''}" data-act="pmres" data-v="${k}" style="--c:${color}">${k !== 'all' ? '<i></i>' : ''}${label}${n != null ? ` ${n}` : ''}</button>`;
+    const sits = [...new Set(all.map((sh) => sh[5]))].filter((k) => SHOT_SIT[k]);
+    body = `<div class="pm-stats">${stat(all.length, 'Laukaukset')}${stat(goals, 'Maalit')}${stat(on, 'Kohti maalia')}${stat(xg.toFixed(2), 'xG')}${stat((xg / all.length).toFixed(2), 'xG / laukaus')}${stat(out, 'Alueen ulkopuolelta')}</div>
+      <div class="pm-filters">${resChip('all', 'Kaikki', 'var(--amber)', all.length)}${Object.entries(SHOT_RES).map(([k, [label, color]]) => { const n = all.filter((sh) => sh[4] === k).length; return n ? resChip(k, label, color, n) : ''; }).join('')}</div>
+      ${sits.length > 1 ? `<div class="pm-filters">${['all', ...sits].map((k) => `<button class="chip ${pm.sit === k ? 'sel' : ''}" data-act="pmsit" data-v="${k}" style="--c:var(--eu)">${k === 'all' ? 'Kaikki tilanteet' : SHOT_SIT[k]}</button>`).join('')}</div>` : ''}
+      <div class="pm-map">${shotMapSvg(vis)}</div>
+      <div class="hint" style="text-align:center">Ympyrän koko = laukauksen xG. Näytetään ${vis.length} / ${all.length} laukausta. Kenttä: hyökkäyspuolisko, maali ylhäällä. Tiedot: Understat.</div>`;
+  }
+  return `<div class="modal-bg top" data-act="close-bg"><div class="modal player" role="dialog" aria-label="${esc(p.name)}">
+    <div class="pm-head">${badge(p.team, 48, p.league)}<div style="min-width:0;flex:1"><h2>${esc(p.name)}</h2>
+      <div class="sub">${p.nationality ? flagHtml(p.nationality) + ' ' : ''}${esc(p.team)}${lg ? ' · ' + esc(lg.name) : ''} · ${esc(p.position)} · ${p.appearances} ottelua · ${p.goals} maalia</div></div>
+      <button class="ghost" data-act="close" title="Sulje (Esc)">✕</button></div>
+    ${body}</div></div>`;
 }
 
 // ---------- ottelun tilastot ----------
@@ -793,7 +896,7 @@ function view() {
       ${S.error ? `<span class="err">⚠ ${esc(S.error)}</span>` : ''}
     </div>
     ${S.section === 'players' ? playersView() : S.section === 'standings' ? standingsView() : fixturesView()}
-  </div>${S.settingsOpen ? settingsView() : ''}${S.teamModal ? teamModalView() : ''}${S.matchModal ? matchModalView() : ''}`;
+  </div>${S.settingsOpen ? settingsView() : ''}${S.teamModal ? teamModalView() : ''}${S.matchModal ? matchModalView() : ''}${S.playerModal ? playerModalView() : ''}`;
 }
 
 function filteredPlayers() {
@@ -854,7 +957,7 @@ function playerRow(p) {
   const c = Math.max(0, 100 - a - b);
   const lg = leagueOf(p.league);
   return `<div class="row">
-    <div class="cell player">${badge(p.team, 36)}<div style="min-width:0"><div class="pname">${esc(p.name)}</div>
+    <div class="cell player open" data-act="player" data-id="${esc(p.id)}" title="Näytä laukauskartta">${badge(p.team, 36, p.league)}<div style="min-width:0"><div class="pname">${esc(p.name)}</div>
       <div class="psub">${p.nationality ? flagHtml(p.nationality) : ''}${lg ? `<i style="--c:${lg.accent}"></i>` : ''}${esc(p.team)}</div></div></div>
     <div class="cell">${flagHtml(p.nationality)}</div>
     <div class="cell muted sm">${esc(p.position)}</div>
@@ -1190,7 +1293,7 @@ document.addEventListener('click', async (e) => {
   const t = e.target.closest('[data-act]');
   if (!t) return;
   const a = t.dataset.act;
-  if (a === 'close-bg') { if (e.target !== t) return; if (S.matchModal) S.matchModal = null; else { S.settingsOpen = false; S.teamModal = null; } render(); return; }
+  if (a === 'close-bg') { if (e.target !== t) return; if (S.matchModal) S.matchModal = null; else if (S.playerModal) S.playerModal = null; else { S.settingsOpen = false; S.teamModal = null; } render(); return; }
   switch (a) {
     case 'league': S.league = t.dataset.v || null; S.team = ''; S.liveOnly = false; onLeagueOrSection(); break;
     case 'section': S.section = t.dataset.v; onLeagueOrSection(); break;
@@ -1230,7 +1333,10 @@ document.addEventListener('click', async (e) => {
       render(true); break;
     }
     case 'settings': S.settingsOpen = true; S.message = ''; render(); break;
-    case 'close': if (S.matchModal) S.matchModal = null; else { S.settingsOpen = false; S.teamModal = null; } render(); break;
+    case 'player': openPlayer(t.dataset.id); break;
+    case 'pmres': S.playerModal.result = t.dataset.v; render(); break;
+    case 'pmsit': S.playerModal.sit = t.dataset.v; render(); break;
+    case 'close': if (S.matchModal) S.matchModal = null; else if (S.playerModal) S.playerModal = null; else { S.settingsOpen = false; S.teamModal = null; } render(); break;
     case 'match': openMatch(findMatch(t.dataset.id)); break;
     case 'icon': S.icon = t.dataset.v; window.api.setIcon(S.icon); window.api.saveStore({ icon: S.icon }); render(); break;
     case 'import': {
@@ -1293,6 +1399,7 @@ document.addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (S.matchModal) { S.matchModal = null; render(); }
+  else if (S.playerModal) { S.playerModal = null; render(); }
   else if (S.teamModal) { S.teamModal = null; render(); }
   else if (S.settingsOpen) { S.settingsOpen = false; render(); }
 });
@@ -1325,6 +1432,7 @@ async function init() {
     if (el) el.textContent = S.playersStatus;
   });
   refresh();
+  ensureCrests();
   enrichNationalities();
   if (playersStale()) updatePlayers();
 }

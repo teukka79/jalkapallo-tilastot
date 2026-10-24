@@ -72,14 +72,18 @@ async function loadLeague(getText, lg, year) {
   return { players, dates: Array.isArray(dates) ? dates : [] };
 }
 
-// Ottelun laukaukset: [pelaajan id, X, Y, tulos]
+const RESULT_CODES = { goal: 'G', savedshot: 'S', missedshots: 'M', missedshot: 'M', blockedshot: 'B', shotonpost: 'P' };
+const SITUATION_CODES = { openplay: 'O', fromcorner: 'C', setpiece: 'S', directfreekick: 'F', penalty: 'P' };
+const letters = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
+
+// Ottelun laukaukset: [pelaajan id, X, Y, tulos, xG, minuutti, tilanne]
 function compactShots(data) {
   const src = data && data.shots ? data.shots : data;
   if (!src || (!Array.isArray(src.h) && !Array.isArray(src.a))) return null;
   const out = [];
   for (const s of [...(src.h || []), ...(src.a || [])]) {
     if (!s || s.player_id == null) continue;
-    out.push([String(s.player_id), num(s.X), num(s.Y), String(s.result || '')]);
+    out.push([String(s.player_id), num(s.X), num(s.Y), String(s.result || ''), num(s.xG), parseInt(s.minute, 10) || 0, String(s.situation || '')]);
   }
   return out;
 }
@@ -107,6 +111,7 @@ async function pool(items, size, fn) {
 async function fetchPlayers({ getText, year = defaultSeasonYear(), cache = {}, onProgress = () => {}, concurrency = 4 }) {
   const seasonCache = (cache[year] = cache[year] || {});
   const players = [];
+  const shotsOut = {}; // pelaajan tunnus -> [[x, y, xG, minuutti, tulos, tilanne], ...]
   const failed = [];
   let fetchedMatches = 0;
 
@@ -126,9 +131,13 @@ async function fetchPlayers({ getText, year = defaultSeasonYear(), cache = {}, o
 
       const agg = new Map();
       for (const id of played) {
-        for (const [pid, x, y, resultRaw] of seasonCache[id] || []) {
-          const result = resultRaw.toLowerCase().replace(/[^a-z]/g, '');
+        for (const [pid, x, y, resultRaw, xg, minute, situation] of seasonCache[id] || []) {
+          const result = letters(resultRaw);
           if (result === 'owngoal') continue;
+          (shotsOut[`${code}-${pid}`] = shotsOut[`${code}-${pid}`] || []).push([
+            Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000, Math.round((xg || 0) * 1000) / 1000, minute || 0,
+            RESULT_CODES[result] || 'M', SITUATION_CODES[letters(situation)] || 'O'
+          ]);
           const a = agg.get(pid) || { shots: 0, on: 0, out: 0, outOn: 0 };
           const onTarget = result === 'goal' || result === 'savedshot';
           const inside = x >= BOX_X && y >= BOX_Y_MIN && y <= BOX_Y_MAX;
@@ -168,7 +177,10 @@ async function fetchPlayers({ getText, year = defaultSeasonYear(), cache = {}, o
       failed.push({ league: code, error: e && e.message ? e.message : String(e) });
     }
   }
-  return { players, failed, fetchedMatches };
+  // Laukaukset vain pelaajille, jotka ovat mukana tuloksessa
+  const known = new Set(players.map((p) => p.id));
+  for (const id of Object.keys(shotsOut)) if (!known.has(id)) delete shotsOut[id];
+  return { players, shots: shotsOut, failed, fetchedMatches };
 }
 
 module.exports = { fetchPlayers, extractVar, unescapeJsString, mapPosition, defaultSeasonYear, LEAGUES };

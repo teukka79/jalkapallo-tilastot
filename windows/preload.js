@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   espn: (req) => ipcRenderer.invoke('espn:get', req),
   odds: (sport, key, force) => ipcRenderer.invoke('odds:get', sport, key, !!force),
   savePlayers: (players, kind) => ipcRenderer.invoke('players:save', players, kind),
+  playerShots: (id) => ipcRenderer.invoke('shots:get', id),
   fetchPlayers: () => ipcRenderer.invoke('players:fetch'),
   onPlayersProgress: (cb) => ipcRenderer.on('players:progress', (_e, p) => cb(p)),
   clearPlayers: () => ipcRenderer.invoke('players:clear'),

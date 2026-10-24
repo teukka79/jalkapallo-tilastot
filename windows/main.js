@@ -23,6 +23,8 @@ const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 const playersFile = () => path.join(app.getPath('userData'), 'players.json');
 const oddsFile = () => path.join(app.getPath('userData'), 'odds-cache.json');
 const shotsCacheFile = () => path.join(app.getPath('userData'), 'understat-shots.json');
+const shotsFile = () => path.join(app.getPath('userData'), 'shots.json');
+const SHOTS_CACHE_VERSION = 2;
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -271,6 +273,22 @@ async function understatGet(url, opts = {}) {
   throw last;
 }
 
+let shotsMem = null;
+function getShots() {
+  if (!shotsMem) {
+    const data = readJson(shotsFile(), null);
+    shotsMem = data && data.shots && typeof data.shots === 'object' ? data.shots : null;
+  }
+  return shotsMem || {};
+}
+
+ipcMain.handle('shots:get', (_e, playerId) => {
+  if (typeof playerId !== 'string' || !/^[A-Za-z0-9._-]{1,40}$/.test(playerId)) return { available: false, shots: [] };
+  const all = getShots();
+  const available = shotsMem !== null && Object.keys(all).length > 0;
+  return { available, shots: Array.isArray(all[playerId]) ? all[playerId] : [] };
+});
+
 let playersFetch = null;
 ipcMain.handle('players:fetch', () => {
   if (playersFetch) return playersFetch;
@@ -278,11 +296,18 @@ ipcMain.handle('players:fetch', () => {
   playersFetch = (async () => {
     const year = understat.defaultSeasonYear();
     const stored = readJson(shotsCacheFile(), {});
-    const cache = { [year]: stored[year] || {} }; // vain kuluva kausi säilytetään
+    const cache = { v: SHOTS_CACHE_VERSION, [year]: stored.v === SHOTS_CACHE_VERSION ? stored[year] || {} : {} }; // vain kuluva kausi säilytetään
     try {
       const r = await understat.fetchPlayers({ getText: understatGet, year, cache, onProgress: send });
       fs.mkdirSync(path.dirname(shotsCacheFile()), { recursive: true });
       fs.writeFileSync(shotsCacheFile(), JSON.stringify(cache));
+      // Laukauskartan tiedot: epäonnistuneiden sarjojen vanhat laukaukset säilyvät
+      const lost = new Set(r.failed.map((f) => f.league));
+      const merged = {};
+      for (const [id, list] of Object.entries(getShots())) if (lost.has(id.split('-')[0])) merged[id] = list;
+      Object.assign(merged, r.shots);
+      fs.writeFileSync(shotsFile(), JSON.stringify({ shots: merged }));
+      shotsMem = merged;
       return { ok: true, players: r.players, failed: r.failed };
     } catch (e) {
       return { ok: false, error: e && e.message ? e.message : String(e) };
