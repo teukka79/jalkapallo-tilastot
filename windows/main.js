@@ -24,7 +24,8 @@ const playersFile = () => path.join(app.getPath('userData'), 'players.json');
 const oddsFile = () => path.join(app.getPath('userData'), 'odds-cache.json');
 const shotsCacheFile = () => path.join(app.getPath('userData'), 'understat-shots.json');
 const shotsFile = () => path.join(app.getPath('userData'), 'shots.json');
-const SHOTS_CACHE_VERSION = 2;
+const SHOTS_CACHE_VERSION = 3;
+const matchesFile = () => path.join(app.getPath('userData'), 'matches.json');
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -289,6 +290,17 @@ ipcMain.handle('shots:get', (_e, playerId) => {
   return { available, shots: Array.isArray(all[playerId]) ? all[playerId] : [] };
 });
 
+let matchesMem = null;
+function getMatches() {
+  if (!matchesMem) {
+    const data = readJson(matchesFile(), null);
+    matchesMem = data && data.matches && typeof data.matches === 'object' ? data.matches : null;
+  }
+  return matchesMem || {};
+}
+
+ipcMain.handle('matches:get', () => getMatches());
+
 let playersFetch = null;
 ipcMain.handle('players:fetch', () => {
   if (playersFetch) return playersFetch;
@@ -308,6 +320,12 @@ ipcMain.handle('players:fetch', () => {
       Object.assign(merged, r.shots);
       fs.writeFileSync(shotsFile(), JSON.stringify({ shots: merged }));
       shotsMem = merged;
+      // Ottelukohtaiset tiedot (Viim. ottelut -sarake): samoin epäonnistuneiden sarjojen vanhat säilyvät
+      const mergedMatches = {};
+      for (const [id, list] of Object.entries(getMatches())) if (lost.has(id.split('-')[0])) mergedMatches[id] = list;
+      Object.assign(mergedMatches, r.matches);
+      fs.writeFileSync(matchesFile(), JSON.stringify({ matches: mergedMatches }));
+      matchesMem = mergedMatches;
       return { ok: true, players: r.players, failed: r.failed };
     } catch (e) {
       return { ok: false, error: e && e.message ? e.message : String(e) };

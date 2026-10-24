@@ -99,6 +99,8 @@ final class AppStore {
     private var crestsByKey: [String: String] = [:]
     @ObservationIgnored private var crestCache: [String: URL?] = [:]
     private var shotFile: ShotFile?
+    /// Pelaajien pelatut ottelut (Viim. ottelut -sarake), ladataan matches.json:sta
+    private(set) var matchLines: [String: [MatchLine]] = [:]
     private var shotFileLoaded = false
     private var goalCache: [String: [GoalEvent]] = [:]
 
@@ -170,6 +172,12 @@ final class AppStore {
             matchStats = decoded
         }
 
+        if let data = try? Data(contentsOf: AppStore.crestsFileURL),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            crests = decoded
+            rebuildCrestIndex()
+        }
+
         loadSampleSchedules()
     }
 
@@ -186,6 +194,17 @@ final class AppStore {
         let found = lookupCrest(team)
         crestCache[team] = found
         return found
+    }
+
+    private func rebuildCrestIndex() {
+        crestCache = [:]
+        crestsByKey = Dictionary(crests.map { (TeamNames.key($0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Joukkue → logon osoite säilyy levyllä, joten logot näkyvät heti seuraavassa käynnistyksessä.
+    private func saveCrests() {
+        guard let data = try? JSONEncoder().encode(crests) else { return }
+        try? data.write(to: AppStore.crestsFileURL, options: .atomic)
     }
 
     private func lookupCrest(_ team: String) -> URL? {
@@ -265,8 +284,8 @@ final class AppStore {
             matches[league.rawValue] = g.matches
             crests.merge(t.crests) { _, new in new }
             crests.merge(g.crests) { _, new in new }
-            crestCache = [:]
-            crestsByKey = Dictionary(crests.map { (TeamNames.key($0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+            rebuildCrestIndex()
+            saveCrests()
             liveLeagues.insert(league.rawValue)
             updatedAt[league.rawValue] = Date()
         } catch {
@@ -400,8 +419,8 @@ final class AppStore {
         todayUpdated = now
         if !newCrests.isEmpty {
             crests.merge(newCrests) { _, new in new }
-            crestCache = [:]
-            crestsByKey = Dictionary(crests.map { (TeamNames.key($0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+            rebuildCrestIndex()
+            saveCrests()
         }
         if let firstError { errorMessage = firstError.localizedDescription }
     }
@@ -471,17 +490,20 @@ final class AppStore {
         let temp = FileManager.default.temporaryDirectory
         let output = temp.appendingPathComponent("players-update.json")
         let shotsOutput = temp.appendingPathComponent("shots-update.json")
+        let matchesOutput = temp.appendingPathComponent("matches-update.json")
         try? FileManager.default.removeItem(at: output)
         try? FileManager.default.removeItem(at: shotsOutput)
+        try? FileManager.default.removeItem(at: matchesOutput)
 
         let result = await runUpdate(python: python, script: script, folder: folder,
-                                     output: output, shotsOutput: shotsOutput)
+                                     output: output, shotsOutput: shotsOutput, matchesOutput: matchesOutput)
         if result.status == 0 {
             do {
                 try importPlayers(data: try Data(contentsOf: output))
                 lastPlayersUpdate = Date()
                 UserDefaults.standard.set(lastPlayersUpdate, forKey: Keys.playersUpdated)
                 installShots(from: shotsOutput)
+                installMatches(from: matchesOutput)
                 await enrichNationalities()
             } catch {
                 errorMessage = "Päivityksen tulosta ei voitu lukea"
@@ -506,6 +528,23 @@ final class AppStore {
         try? FileManager.default.copyItem(at: url, to: AppStore.shotsFileURL)
         shotFile = nil
         shotFileLoaded = false
+    }
+
+    private func installMatches(from url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try? FileManager.default.removeItem(at: AppStore.matchesFileURL)
+        try? FileManager.default.copyItem(at: url, to: AppStore.matchesFileURL)
+        Task { await loadMatchLines() }
+    }
+
+    /// Lukee pelaajien ottelurivit tiedostosta (puuttuva tiedosto = sarake näyttää viivat).
+    func loadMatchLines() async {
+        let url = AppStore.matchesFileURL
+        let file = await Task.detached(priority: .userInitiated) { () -> MatchFile? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(MatchFile.self, from: data)
+        }.value
+        matchLines = file?.matches ?? [:]
     }
 
     private final class OutputBuffer: @unchecked Sendable {
@@ -538,11 +577,12 @@ final class AppStore {
     }
 
     private func runUpdate(python: String, script: String, folder: String,
-                           output: URL, shotsOutput: URL) async -> (status: Int32, lastLine: String) {
+                           output: URL, shotsOutput: URL, matchesOutput: URL) async -> (status: Int32, lastLine: String) {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: python)
-            process.arguments = [script, "--out", output.path, "--shots-out", shotsOutput.path]
+            process.arguments = [script, "--out", output.path, "--shots-out", shotsOutput.path,
+                                 "--matches-out", matchesOutput.path]
             process.currentDirectoryURL = URL(fileURLWithPath: folder)
             var environment = ProcessInfo.processInfo.environment
             environment["PYTHONUNBUFFERED"] = "1"
@@ -776,6 +816,18 @@ final class AppStore {
         let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                 appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
         return dir.appendingPathComponent("shots.json")
+    }
+
+    private static var crestsFileURL: URL {
+        let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("crests.json")
+    }
+
+    private static var matchesFileURL: URL {
+        let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("matches.json")
     }
 
     private static var statsFileURL: URL {

@@ -99,6 +99,7 @@ def main() -> None:
     parser.add_argument("--season", default=default_season(), help="esim. 2526 = kausi 2025-26")
     parser.add_argument("--out", default="players.json")
     parser.add_argument("--shots-out", default=None, help="laukaustapahtumat (laukauskartta); oletus: shots.json --out-tiedoston viereen")
+    parser.add_argument("--matches-out", default=None, help="pelatut ottelut (Viim. ottelut -sarake); oletus: matches.json --out-tiedoston viereen")
     parser.add_argument("--min-apps", type=int, default=1, help="pienin otteluiden määrä")
     args = parser.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # sovellus näyttää etenemisen rivi kerrallaan
@@ -175,6 +176,12 @@ def main() -> None:
     shots_out = args.shots_out or os.path.join(os.path.dirname(os.path.abspath(args.out)), "shots.json")
     write_shots(shots, id_by_key, result, shots_out)
 
+    matches_out = args.matches_out or os.path.join(os.path.dirname(os.path.abspath(args.out)), "matches.json")
+    try:
+        write_matches(understat, shots, id_by_key, result, matches_out)
+    except Exception as exc:  # sarake jää tyhjäksi, mutta pelaajat ja laukaukset on jo tallennettu
+        print(f"Ottelukohtaisia tietoja ei saatu: {exc}", flush=True)
+
 
 RESULT_CODES = {"goal": "G", "savedshot": "S", "missedshots": "M", "missedshot": "M",
                 "blockedshot": "B", "shotonpost": "P"}
@@ -205,6 +212,57 @@ def write_shots(shots: pd.DataFrame, id_by_key: dict, normalized_result: pd.Seri
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"shots": by_player}, f, separators=(",", ":"))
     print(f"Laukaukset: {sum(len(v) for v in by_player.values())} kpl -> {path}", flush=True)
+
+
+def opponent_of(game: str, team: str) -> str:
+    """soccerdatan ottelutunnus on muotoa 'YYYY-MM-DD Koti-Vieras'."""
+    rest = game[11:] if len(game) > 11 else game
+    if rest.startswith(team + "-"):
+        return rest[len(team) + 1:]
+    if rest.endswith("-" + team):
+        return rest[: -len(team) - 1]
+    return ""
+
+
+def write_matches(understat, shots: pd.DataFrame, id_by_key: dict, normalized_result: pd.Series, path: str) -> None:
+    """Pelaajan pelatut ottelut: {"matches": {pelaajan_id: [[päivä, vastustaja, maalit, laukaukset, maalia kohti,
+    ulkopuolelta, ulkopuolelta maalia kohti, minuutit], ...]}} aikajärjestyksessä."""
+    stats = understat.read_player_match_stats().reset_index()
+    keys = ["league", "game", "team", "player"]
+    require(stats, keys + ["minutes"], "Ottelukohtaiset tilastot")
+    require(shots, keys, "Laukaukset (ottelutunnus)")
+
+    # Ottelukohtaisen tilaston omat sarakkeet (goals, shots, ...) eivät saa törmätä laukausten summiin, joten summat saavat s_-etuliitteen
+    per = (
+        shots.assign(is_goal=(normalized_result == "goal"))
+        .groupby(keys)
+        .agg(s_goals=("is_goal", "sum"), s_count=("on_target", "size"), s_on=("on_target", "sum"),
+             s_out=("outside", "sum"), s_outon=("outside_on", "sum"))
+        .reset_index()
+    )
+    merged = stats[keys + ["minutes"]].merge(per, on=keys, how="left").fillna(
+        {"s_goals": 0, "s_count": 0, "s_on": 0, "s_out": 0, "s_outon": 0}
+    )
+
+    by_player = {}
+    for row in merged.itertuples(index=False):
+        minutes = int(row.minutes) if pd.notna(row.minutes) else 0
+        if minutes <= 0 and row.s_count == 0:
+            continue
+        pid = id_by_key.get((row.league, row.team, row.player))
+        if pid is None:
+            continue
+        game = str(row.game)
+        opp = opponent_of(game, str(row.team)) or "?"
+        by_player.setdefault(pid, []).append([
+            game[:10], TEAM_NAMES.get(opp, opp), int(row.s_goals), int(row.s_count), int(row.s_on),
+            int(row.s_out), int(row.s_outon), minutes,
+        ])
+    for rows in by_player.values():
+        rows.sort(key=lambda r: r[0])
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"matches": by_player}, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"Ottelut: {sum(len(v) for v in by_player.values())} riviä -> {path}", flush=True)
 
 
 if __name__ == "__main__":

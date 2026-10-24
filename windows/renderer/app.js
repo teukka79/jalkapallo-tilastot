@@ -32,7 +32,7 @@ const leagueOf = (code) => LEAGUES.find((l) => l.code === code);
 const S = {
   league: null, section: 'players',
   players: [], playersSource: 'none', playersUpdated: null, playersPartial: false, updatingPlayers: false, playersStatus: '', playersNote: '', nationalities: {}, enriching: false,
-  matches: {}, standings: {}, crests: {}, crestsBy: {}, playerModal: null, live: {}, updatedAt: {},
+  matches: {}, standings: {}, crests: {}, crestsBy: {}, playerModal: null, pmatches: {}, stripN: 5, stripKey: 'goals', live: {}, updatedAt: {},
   today: [], todayLive: {}, todayUpdated: null, loadingToday: false,
   loading: false, error: null,
   ratings: {}, apiKey: '', oddsKey: '', oddsRemaining: null, oddsError: '', odds: {}, icon: 'night',
@@ -123,7 +123,20 @@ function setCrest(name, url, code) {
   S.crests[name] = url; S.crests[tkey(name)] = url;
   if (code) (S.crestsBy[code] = S.crestsBy[code] || {})[tkey(name)] = url;
   crestCache.clear();
+  saveCrestsSoon();
 }
+// Logo-osoitteet säilyvät levyllä (localStorage), joten logot näkyvät heti seuraavassa käynnistyksessä.
+let crestSaveTimer = null;
+function saveCrestsSoon() {
+  clearTimeout(crestSaveTimer);
+  crestSaveTimer = setTimeout(() => {
+    try { localStorage.setItem('crests', JSON.stringify({ c: S.crests, b: S.crestsBy })); } catch { /* ei tallennusta */ }
+  }, 500);
+}
+try {
+  const saved = JSON.parse(localStorage.getItem('crests') || 'null');
+  if (saved && saved.c) { Object.assign(S.crests, saved.c); Object.assign(S.crestsBy, saved.b || {}); }
+} catch { /* ei tallennusta */ }
 function crestFor(name, code) {
   const direct = S.crests[name] || S.crests[tkey(name)];
   if (direct || !code || !S.crestsBy[code]) return direct;
@@ -505,6 +518,10 @@ function playersStale() {
   return Date.now() - new Date(S.playersUpdated).getTime() > PLAYERS_MAX_AGE;
 }
 
+async function loadMatches() {
+  try { S.pmatches = (await window.api.playerMatches()) || {}; render(); } catch { /* sarake näyttää viivat */ }
+}
+
 async function updatePlayers() {
   if (S.updatingPlayers) return;
   S.updatingPlayers = true; S.playersStatus = 'Haetaan pelaajadataa…'; S.playersNote = '';
@@ -527,6 +544,7 @@ async function updatePlayers() {
   if (lost.size) S.playersNote = `Osa sarjoista jäi päivittämättä: ${failed.map((f) => `${f.league} (${f.error})`).join(', ')}. Yritetään uudelleen seuraavalla päivityksellä.`;
   render();
   enrichNationalities();
+  loadMatches();
   if (S.playerModal) openPlayer(S.playerModal.id);
 }
 
@@ -535,7 +553,7 @@ const crestTried = new Set();
 async function ensureCrests() {
   let changed = false;
   for (const lg of LEAGUES.filter((l) => l.stats)) {
-    if (crestTried.has(lg.code) || S.crestsBy[lg.code]) continue;
+    if (crestTried.has(lg.code)) continue;
     crestTried.add(lg.code);
     try { await espnStandings(lg); changed = true; } catch { /* logot jäävät nimikirjaimiksi */ }
   }
@@ -597,9 +615,9 @@ function playerModalView() {
   else {
     const goals = all.filter((sh) => sh[4] === 'G').length, on = all.filter((sh) => sh[4] === 'G' || sh[4] === 'S').length;
     const xg = all.reduce((a, sh) => a + sh[2], 0), out = all.filter(outsideBox).length;
-    const stat = (v, l) => `<div class="pm-stat"><b>${v}</b><small>${l}</small></div>`;
     const resChip = (k, label, color, n) => `<button class="chip ${pm.result === k ? 'sel' : ''}" data-act="pmres" data-v="${k}" style="--c:${color}">${k !== 'all' ? '<i></i>' : ''}${label}${n != null ? ` ${n}` : ''}</button>`;
     const sits = [...new Set(all.map((sh) => sh[5]))].filter((k) => SHOT_SIT[k]);
+    const stat = (v, l) => `<div class="pm-stat"><b>${v}</b><small>${l}</small></div>`;
     body = `<div class="pm-stats">${stat(all.length, 'Laukaukset')}${stat(goals, 'Maalit')}${stat(on, 'Kohti maalia')}${stat(xg.toFixed(2), 'xG')}${stat((xg / all.length).toFixed(2), 'xG / laukaus')}${stat(out, 'Alueen ulkopuolelta')}</div>
       <div class="pm-filters">${resChip('all', 'Kaikki', 'var(--amber)', all.length)}${Object.entries(SHOT_RES).map(([k, [label, color]]) => { const n = all.filter((sh) => sh[4] === k).length; return n ? resChip(k, label, color, n) : ''; }).join('')}</div>
       ${sits.length > 1 ? `<div class="pm-filters">${['all', ...sits].map((k) => `<button class="chip ${pm.sit === k ? 'sel' : ''}" data-act="pmsit" data-v="${k}" style="--c:var(--eu)">${k === 'all' ? 'Kaikki tilanteet' : SHOT_SIT[k]}</button>`).join('')}</div>` : ''}
@@ -899,6 +917,11 @@ function view() {
   </div>${S.settingsOpen ? settingsView() : ''}${S.teamModal ? teamModalView() : ''}${S.matchModal ? matchModalView() : ''}${S.playerModal ? playerModalView() : ''}`;
 }
 
+function stripHead() {
+  const m = STRIP[stripKey()];
+  return `<button class="hcell strip-head" data-act="stripn" title="Viimeisimmät ottelut, joissa pelaaja oli mukana. Mittari seuraa lajittelua. Klikkaa vaihtaaksesi ottelujen määrää (3 / 5 / 10).">Viim. ${S.stripN} ottelua\n${m.label}</button>`;
+}
+
 function filteredPlayers() {
   let list = S.league ? S.players.filter((p) => p.league === S.league) : S.players.slice();
   if (S.team) list = list.filter((p) => p.team === S.team);
@@ -941,11 +964,39 @@ function playersView() {
         ${H('Ottelut', 'appearances')}${H('Maalit', 'goals')}${H('Laukaukset', 'shots')}${H('Maalia kohti', 'shotsOnTarget')}
         ${H('Maalia kohti\nulkopuolelta', 'shotsOnTargetOutsideBox', 'Maalia kohti -laukaukset rangaistusalueen ulkopuolelta')}
         ${H('Laukaukset\nulkopuolelta', 'shotsOutsideBox', 'Kaikki laukaukset rangaistusalueen ulkopuolelta')}
-        ${H('Maalia\nkohti %', 'onTargetPercent')}${H('Lauk.\n/ ott.', 'perGame')}${plain('Jakauma')}${plain('Tähdet')}
+        ${H('Maalia\nkohti %', 'onTargetPercent')}${H('Lauk.\n/ ott.', 'perGame')}${plain('Jakauma')}${stripHead()}${plain('Tähdet')}
       </div>
       ${rows.length ? `<div class="scroll">${rows.map(playerRow).join('')}</div>`
         : `<div class="empty"><b>Ei pelaajia valituilla rajauksilla</b><button class="ghost" data-act="clear">Tyhjennä rajaukset</button></div>`}
     </div>`;
+}
+
+// Viim. ottelut -sarake: ruudut näyttävät sen mittarin, jonka mukaan taulukko on lajiteltu
+const STRIP = {
+  goals: { label: 'Maalit', idx: 2, hi: 2, one: 'maalia' },
+  shots: { label: 'Laukaukset', idx: 3, hi: 4 },
+  shotsOnTarget: { label: 'Maalia kohti', idx: 4, hi: 3 },
+  shotsOnTargetOutsideBox: { label: 'Maalia kohti ulkop.', idx: 6, hi: 2 },
+  shotsOutsideBox: { label: 'Lauk. ulkop.', idx: 5, hi: 3 }
+};
+const STRIP_SIZES = [3, 5, 10];
+try { const n = parseInt(localStorage.getItem('stripN'), 10); if (STRIP_SIZES.includes(n)) S.stripN = n; } catch { /* ei tallennusta */ }
+function stripKey() {
+  if (STRIP[S.sort]) S.stripKey = S.sort;
+  return STRIP[S.stripKey] ? S.stripKey : 'goals';
+}
+const stripDate = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
+
+function stripCell(p, key) {
+  const list = S.pmatches[p.id];
+  if (!list || !list.length) return '<span class="sc-none" title="Ottelukohtaiset tiedot haetaan, kun pelaajadata päivitetään Understatista">–</span>';
+  const m = STRIP[key];
+  return `<span class="strip-m ${S.stripN > 5 ? 'dense' : ''}">${list.slice(-S.stripN).map((r) => {
+    const v = r[m.idx];
+    const cls = v === 0 ? 'z0' : v >= m.hi ? 'z2' : 'z1';
+    const tip = `${stripDate(r[0])} · ${r[1]}\n${r[2]} maalia, ${r[3]} laukausta (${r[4]} maalia kohti)\nUlkopuolelta ${r[5]} (${r[6]} maalia kohti)${r[7] > 0 ? `\n${r[7]} min` : ''}`;
+    return `<span class="sc ${cls}" title="${esc(tip)}">${v}</span>`;
+  }).join('')}</span>`;
 }
 
 function playerRow(p) {
@@ -970,6 +1021,7 @@ function playerRow(p) {
     <div class="cell num${hot('onTargetPercent')}">${fmt1(onTargetPct(p))}</div>
     <div class="cell num${hot('perGame')}">${fmt1(perGame(p))}</div>
     <div class="cell"><span class="mix" title="Kirkas: maalia kohti ulkopuolelta · himmeä: muut ulkopuolelta · harmaa: rangaistusalueen sisältä"><span style="width:${a}%"></span><span style="width:${b}%"></span><span style="width:${c}%"></span></span></div>
+    <div class="cell">${stripCell(p, stripKey())}</div>
     <div class="cell"><span class="stars">${[1, 2, 3].map((n) => `<button class="${n <= r ? 'on' : ''}" data-act="star" data-id="${esc(p.id)}" data-n="${n}">${n <= r ? '★' : '☆'}</button>`).join('')}</span></div>
   </div>`;
 }
@@ -1326,6 +1378,11 @@ document.addEventListener('click', async (e) => {
       if (playersStale()) updatePlayers();
       break;
     case 'updplayers': updatePlayers(); break;
+    case 'stripn': {
+      S.stripN = STRIP_SIZES[(STRIP_SIZES.indexOf(S.stripN) + 1) % STRIP_SIZES.length];
+      try { localStorage.setItem('stripN', String(S.stripN)); } catch { /* ei tallennusta */ }
+      render(); break;
+    }
     case 'md': {
       const days = [...new Set((S.matches[focus()] || []).map((m) => m.matchday))].sort((a, b) => a - b);
       const i = days.indexOf(S.matchday) + (+t.dataset.d);
@@ -1431,6 +1488,7 @@ async function init() {
     const el = document.querySelector('[data-pstatus]');
     if (el) el.textContent = S.playersStatus;
   });
+  loadMatches();
   refresh();
   ensureCrests();
   enrichNationalities();

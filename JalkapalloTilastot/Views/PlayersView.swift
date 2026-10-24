@@ -7,7 +7,7 @@ enum PlayerSort: String, Codable {
 /// Sarakkeiden leveydet jaetaan otsikon ja rivien kesken, ettei mikään karkaa kohdalta.
 private enum Col {
     static let nationality: CGFloat = 48
-    static let position: CGFloat = 90
+    static let position: CGFloat = 82
     static let appearances: CGFloat = 56
     static let goals: CGFloat = 56
     static let shots: CGFloat = 76
@@ -18,8 +18,97 @@ private enum Col {
     static let perGame: CGFloat = 62
     static let xG: CGFloat = 52
     static let xGDiff: CGFloat = 70
-    static let mix: CGFloat = 80
-    static let stars: CGFloat = 84
+    static let mix: CGFloat = 72
+    static let strip: CGFloat = 116
+    static let stars: CGFloat = 76
+}
+
+/// Viim. ottelut -sarakkeen mittari: seuraa taulukon lajittelua (muilla sarakkeilla pysyy viimeksi valittu).
+private enum StripMetric {
+    case goals, shots, onTarget, outside, onTargetOutside
+
+    init?(sort: PlayerSort) {
+        switch sort {
+        case .goals: self = .goals
+        case .shots: self = .shots
+        case .onTarget: self = .onTarget
+        case .outside: self = .outside
+        case .onTargetOutside: self = .onTargetOutside
+        default: return nil
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .goals: return "Maalit"
+        case .shots: return "Laukaukset"
+        case .onTarget: return "Maalia kohti"
+        case .outside: return "Lauk. ulkop."
+        case .onTargetOutside: return "Maalia kohti ulkop."
+        }
+    }
+
+    /// Arvo, josta alkaen ruutu korostetaan kirkkaana
+    var highAt: Int {
+        switch self {
+        case .goals: return 2
+        case .shots: return 4
+        case .onTarget: return 3
+        case .outside: return 3
+        case .onTargetOutside: return 2
+        }
+    }
+
+    func value(_ line: MatchLine) -> Int {
+        switch self {
+        case .goals: return line.goals
+        case .shots: return line.shots
+        case .onTarget: return line.onTarget
+        case .outside: return line.outside
+        case .onTargetOutside: return line.outsideOnTarget
+        }
+    }
+}
+
+/// Pelaajan viimeisimmät ottelut pieninä ruutuina (vanhin vasemmalla).
+private struct MatchStrip: View {
+    let lines: [MatchLine]?
+    let metric: StripMetric
+    let count: Int
+
+    var body: some View {
+        if let lines, !lines.isEmpty {
+            let dense = count > 5
+            HStack(spacing: dense ? 2 : 3) {
+                ForEach(Array(lines.suffix(count).enumerated()), id: \.offset) { _, line in
+                    cell(line, dense: dense)
+                }
+            }
+        } else {
+            Text("–")
+                .font(Theme.label(12))
+                .foregroundStyle(Theme.chalkMuted)
+                .help("Ottelukohtaiset tiedot haetaan, kun pelaajat päivitetään")
+        }
+    }
+
+    private func cell(_ line: MatchLine, dense: Bool) -> some View {
+        let v = metric.value(line)
+        let fill: Color = v == 0 ? Color.white.opacity(0.06)
+            : (v >= metric.highAt ? Theme.floodlight : Theme.floodlight.opacity(0.28))
+        let text: Color = v == 0 ? Theme.chalkMuted : (v >= metric.highAt ? Color.black.opacity(0.85) : Color(hex: 0xFFD9A0))
+        var tip = "\(line.shortDate) · \(line.opponent)\n\(line.goals) maalia, \(line.shots) laukausta (\(line.onTarget) maalia kohti)"
+        tip += "\nUlkopuolelta \(line.outside) (\(line.outsideOnTarget) maalia kohti)"
+        if line.minutes > 0 { tip += "\n\(line.minutes) min" }
+        return ZStack {
+            RoundedRectangle(cornerRadius: dense ? 3 : 5, style: .continuous).fill(fill)
+            if !dense {
+                Text("\(v)").font(Theme.number(11, weight: .bold)).foregroundStyle(text)
+            }
+        }
+        .frame(width: dense ? 9 : 20, height: dense ? 16 : 20)
+        .help(tip)
+    }
 }
 
 struct PlayersView: View {
@@ -33,6 +122,8 @@ struct PlayersView: View {
     @State private var minApps = 0
     @State private var minMinutes = 0
     @State private var sortKey: PlayerSort = .goals
+    @State private var stripSort: PlayerSort = .goals
+    @AppStorage("stripCount") private var stripCount = 5
     @State private var ascending = false
     @State private var selected: Player?
     @State private var savingView = false
@@ -56,6 +147,8 @@ struct PlayersView: View {
                             Section {
                                 ForEach(rows) { player in
                                     PlayerRow(player: player, sortKey: sortKey, showXG: showXG,
+                                              strip: StripMetric(sort: stripSort) ?? .goals,
+                                              stripLines: store.matchLines[player.id], stripCount: stripCount,
                                               rating: store.rating(for: player.id),
                                               watched: store.isWatched(player.id),
                                               hasNote: store.hasNote(player.id),
@@ -77,6 +170,10 @@ struct PlayersView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .sheet(item: $selected) { PlayerDetailView(player: $0) }
+        .task { await store.loadMatchLines() }
+        .onChange(of: sortKey) { _, new in
+            if StripMetric(sort: new) != nil { stripSort = new }
+        }
         .alert("Tallenna näkymä", isPresented: $savingView) {
             TextField("Nimi", text: $newViewName)
             Button("Tallenna") { saveCurrentView() }
@@ -290,9 +387,29 @@ struct PlayersView: View {
                            help: "Maalit miinus xG. Positiivinen = tehnyt enemmän kuin laukausten laatu antaisi odottaa")
             }
             sortButton("Jakauma", nil, width: Col.mix)
+            stripHeader
             sortButton("Tähdet", nil, width: Col.stars)
         }
         .padding(.horizontal, 16)
+    }
+
+    /// Klikkaus vaihtaa ottelujen määrää (3 / 5 / 10); mittari seuraa lajittelua.
+    private var stripHeader: some View {
+        let metric = StripMetric(sort: stripSort) ?? .goals
+        return Button {
+            let sizes = [3, 5, 10]
+            let index = sizes.firstIndex(of: stripCount) ?? 1
+            stripCount = sizes[(index + 1) % sizes.count]
+        } label: {
+            Text("Viim. \(stripCount) ottelua\n\(metric.title)")
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .font(Theme.label(11, weight: .semibold))
+                .foregroundStyle(Theme.chalkMuted)
+                .frame(width: Col.strip, height: 42)
+        }
+        .buttonStyle(.plain)
+        .help("Viimeisimmät ottelut, joissa pelaaja oli mukana. Mittari seuraa lajittelua. Klikkaa vaihtaaksesi ottelujen määrää (3 / 5 / 10).")
     }
 
     private func sortButton(_ title: String, _ key: PlayerSort?, width: CGFloat?,
@@ -345,6 +462,9 @@ private struct PlayerRow: View {
     let player: Player
     let sortKey: PlayerSort
     let showXG: Bool
+    let strip: StripMetric
+    let stripLines: [MatchLine]?
+    let stripCount: Int
     let rating: Int
     let watched: Bool
     let hasNote: Bool
@@ -394,6 +514,7 @@ private struct PlayerRow: View {
                 diffCell
             }
             ShotMixBar(player: player).frame(width: Col.mix)
+            MatchStrip(lines: stripLines, metric: strip, count: stripCount).frame(width: Col.strip, alignment: .leading)
             StarRating(value: rating, onChange: onRate).frame(width: Col.stars)
         }
         .padding(.horizontal, 16)

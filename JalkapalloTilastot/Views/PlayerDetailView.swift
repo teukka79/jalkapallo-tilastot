@@ -9,6 +9,8 @@ struct PlayerDetailView: View {
     @State private var shots: [Shot] = []
     @State private var loading = true
     @State private var filter: ShotFilter = .all
+    @State private var resultFilter: ShotResult?
+    @State private var situationFilter: String?
     @State private var note = ""
 
     enum ShotFilter: CaseIterable {
@@ -25,12 +27,90 @@ struct PlayerDetailView: View {
     }
 
     private var visible: [Shot] {
+        var list: [Shot]
         switch filter {
-        case .all: return shots
-        case .goals: return shots.filter { $0.result == .goal }
-        case .onTarget: return shots.filter { $0.result.onTarget }
-        case .outside: return shots.filter { $0.isOutsideBox }
+        case .all: list = shots
+        case .goals: list = shots.filter { $0.result == .goal }
+        case .onTarget: list = shots.filter { $0.result.onTarget }
+        case .outside: list = shots.filter { $0.isOutsideBox }
         }
+        if let resultFilter { list = list.filter { $0.result == resultFilter } }
+        if let situationFilter { list = list.filter { $0.situation == situationFilter } }
+        return list
+    }
+
+    private static let resultOrder: [ShotResult] = [.goal, .saved, .post, .missed, .blocked]
+
+    private static func resultTitle(_ r: ShotResult) -> String {
+        switch r {
+        case .goal: return "Maali"
+        case .saved: return "Torjuttu"
+        case .post: return "Tolppa"
+        case .missed: return "Ohi"
+        case .blocked: return "Blokattu"
+        }
+    }
+
+    private static func resultColor(_ r: ShotResult) -> Color {
+        switch r {
+        case .goal: return Theme.floodlight
+        case .saved: return Theme.positive
+        case .post: return Color(red: 0.71, green: 0.55, blue: 1.0)
+        case .missed: return Theme.chalkMuted
+        case .blocked: return Theme.negative
+        }
+    }
+
+    private static let situationTitles: [String: String] = [
+        "O": "Avopeli", "C": "Kulma", "S": "Vakiotilanne", "F": "Vapaapotku", "P": "Rangaistus"
+    ]
+
+    /// Tulos- ja tilannesuodattimet: rivit näkyvät vain, kun valittavaa on.
+    private var detailFilters: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    filterChip("Kaikki \(shots.count)", color: Theme.floodlight, dot: false, selected: resultFilter == nil) { resultFilter = nil }
+                    ForEach(Self.resultOrder, id: \.self) { r in
+                        let n = shots.filter { $0.result == r }.count
+                        if n > 0 {
+                            filterChip("\(Self.resultTitle(r)) \(n)", color: Self.resultColor(r), dot: true, selected: resultFilter == r) {
+                                resultFilter = (resultFilter == r) ? nil : r
+                            }
+                        }
+                    }
+                }
+            }
+            let situations = Self.situationTitles.keys.sorted().filter { key in shots.contains { $0.situation == key } }
+            if situations.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        filterChip("Kaikki tilanteet", color: Theme.floodlight, dot: false, selected: situationFilter == nil) { situationFilter = nil }
+                        ForEach(situations, id: \.self) { key in
+                            filterChip(Self.situationTitles[key] ?? key, color: Theme.floodlight, dot: false, selected: situationFilter == key) {
+                                situationFilter = (situationFilter == key) ? nil : key
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func filterChip(_ title: String, color: Color, dot: Bool, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: { withAnimation(.snappy(duration: 0.2)) { action() } }) {
+            HStack(spacing: 6) {
+                if dot { Circle().fill(selected ? Color.black.opacity(0.55) : color).frame(width: 8, height: 8) }
+                Text(title)
+                    .font(Theme.label(12, weight: .semibold))
+                    .foregroundStyle(selected ? Color.black.opacity(0.85) : Theme.chalk)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(selected ? color : Theme.panelRaised))
+            .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     var body: some View {
@@ -156,6 +236,7 @@ struct PlayerDetailView: View {
                     .foregroundStyle(Theme.chalkMuted)
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
+                detailFilters
                 ShotMapView(shots: visible)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Laukauskartta")

@@ -47,3 +47,39 @@ struct Shot: Hashable, Decodable {
 struct ShotFile: Decodable {
     let shots: [String: [Shot]]
 }
+
+/// Yksi pelaajan pelaama ottelu. JSONissa rivi on taulukko
+/// [päivä, vastustaja, maalit, laukaukset, maalia kohti, ulkopuolelta, ulkopuolelta maalia kohti, minuutit].
+struct MatchLine: Hashable, Decodable {
+    let date: String
+    let opponent: String
+    let goals: Int
+    let shots: Int
+    let onTarget: Int
+    let outside: Int
+    let outsideOnTarget: Int
+    let minutes: Int
+
+    init(from decoder: Decoder) throws {
+        var c = try decoder.unkeyedContainer()
+        date = try c.decode(String.self)
+        opponent = try c.decode(String.self)
+        goals = try c.decode(Int.self)
+        shots = try c.decode(Int.self)
+        onTarget = try c.decode(Int.self)
+        outside = try c.decode(Int.self)
+        outsideOnTarget = try c.decode(Int.self)
+        minutes = try c.decode(Int.self)
+    }
+
+    /// "2026-10-03" -> "03.10."
+    var shortDate: String {
+        guard date.count >= 10 else { return date }
+        return "\(date.suffix(2)).\(date.dropFirst(5).prefix(2))."
+    }
+}
+
+/// matches.json: pelaajan tunnus -> pelatut ottelut aikajärjestyksessä
+struct MatchFile: Decodable {
+    let matches: [String: [MatchLine]]
+}
