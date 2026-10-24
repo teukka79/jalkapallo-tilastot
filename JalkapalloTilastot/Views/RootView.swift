@@ -25,6 +25,7 @@ struct RootView: View {
                 }
                 content
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 28)
             .padding(.top, 34)
             .padding(.bottom, 20)
@@ -32,6 +33,7 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
         .onAppear { store.applyAppIcon() }
         .task(id: store.focusLeague) { await store.refresh() }
+        .task { await store.autoUpdatePlayersIfNeeded() }
     }
 
     // MARK: Osat
@@ -39,7 +41,7 @@ struct RootView: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Jalkapallon Laukaustilasto")
+                Text("Jalkapallotilastot")
                     .font(Theme.title(32))
                     .foregroundStyle(Theme.chalk)
                 Text("Kausi 2026/2027 · \(store.players.count) pelaajaa · \(store.ratedCount) arvosteltu")
@@ -47,30 +49,84 @@ struct RootView: View {
                     .foregroundStyle(Theme.chalkMuted)
             }
             Spacer()
-            Text(statusText)
-                .font(Theme.label(12))
-                .foregroundStyle(store.isLive(store.focusLeague) ? Theme.positive : Theme.floodlight)
-                .multilineTextAlignment(.trailing)
-                .padding(.top, 8)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(statusText)
+                    .font(Theme.label(12))
+                    .foregroundStyle(statusColor)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(2)
+                if store.isUpdatingPlayers {
+                    if let progress = store.playerUpdateProgress {
+                        ProgressView(value: progress).tint(Theme.floodlight).frame(width: 220)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            .frame(maxWidth: 360, alignment: .trailing)
+            .padding(.top, 8)
             Button {
-                Task { await store.refresh(force: true) }
+                Task {
+                    if store.section == .players { await store.updatePlayers() }
+                    else if showsToday { await store.refreshToday() }
+                    else { await store.refresh(force: true) }
+                }
             } label: {
-                Label(store.isLoading ? "Haetaan…" : "Päivitä", systemImage: "arrow.clockwise")
+                Label(refreshTitle, systemImage: "arrow.clockwise")
             }
             .buttonStyle(GhostButtonStyle())
-            .disabled(store.isLoading || !store.hasAPIKey)
+            .disabled(refreshDisabled)
+            .help(store.section == .players
+                  ? "Hakee pelaajien uudet laukaustilastot Understatista (ensimmäinen kerta kestää)"
+                  : "Hakee sarjataulukon ja otteluohjelman")
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 .buttonStyle(GhostButtonStyle())
+                .accessibilityLabel("Asetukset")
+                .help("Asetukset")
         }
     }
 
+    private var refreshTitle: String {
+        if store.section == .players { return store.isUpdatingPlayers ? "Päivitetään…" : "Päivitä pelaajat" }
+        return (showsToday ? store.isLoadingToday : store.isLoading) ? "Haetaan…" : "Päivitä"
+    }
+
+    /// Otteluohjelma ilman sarjavalintaa näyttää tämän päivän ottelut kaikista sarjoista.
+    private var showsToday: Bool { store.section == .fixtures && store.selectedLeague == nil }
+
+    private var refreshDisabled: Bool {
+        if store.section == .players { return store.isUpdatingPlayers }
+        if showsToday { return store.isLoadingToday }
+        return store.isLoading || !store.hasKey(for: store.focusLeague)
+    }
+
+    private var statusColor: Color {
+        if store.section == .players { return store.isUpdatingPlayers ? Theme.floodlight : Theme.chalkMuted }
+        if showsToday { return store.liveToday.isEmpty ? Theme.floodlight : Theme.positive }
+        return store.isLive(store.focusLeague) ? Theme.positive : Theme.floodlight
+    }
+
     private var statusText: String {
+        if store.section == .players {
+            if let status = store.playerUpdateStatus { return status }
+            if let date = store.lastPlayersUpdate {
+                return "Pelaajatilastot päivitetty \(Format.day(date)) \(Format.time(date))"
+            }
+            return store.playersAreSample ? "Pelaajat: esimerkkidata" : "Pelaajat: tuotu data"
+        }
+        if showsToday {
+            guard let date = store.todayUpdated else { return "Haetaan tämän päivän otteluita…" }
+            return store.liveToday.isEmpty ? "Tänään: esimerkkidata"
+                                           : "Tänään: live-data, päivitetty \(Format.time(date))"
+        }
         let league = store.focusLeague
         if store.isLive(league), let date = store.updatedAt[league.rawValue] {
             return "\(league.name): live-data, päivitetty \(Format.time(date))"
         }
-        return store.hasAPIKey ? "Taulukot ja ottelut: esimerkkidata, haetaan…"
-                               : "Taulukot ja ottelut: esimerkkidata\nLisää API-avain asetuksissa"
+        if store.hasKey(for: league) { return "Taulukot ja ottelut: esimerkkidata, haetaan…" }
+        return league.source == .apiFootball
+            ? "Taulukot ja ottelut: esimerkkidata\nTämä sarja tarvitsee API-Football-avaimen (asetukset)"
+            : "Taulukot ja ottelut: esimerkkidata\nLisää API-avain asetuksissa"
     }
 
     private var leagueBar: some View {

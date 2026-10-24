@@ -26,6 +26,25 @@ targets:
     entitlements:
       path: Config/JalkapalloTilastot.entitlements
       properties:
-        com.apple.security.app-sandbox: true
+        com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-write: true
+  JalkapalloTilastotTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+    dependencies:
+      - target: JalkapalloTilastot
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: fi.teukka.JalkapalloTilastotTests
+schemes:
+  JalkapalloTilastot:
+    build:
+      targets:
+        JalkapalloTilastot: all
+    test:
+      targets:
+        - JalkapalloTilastotTests

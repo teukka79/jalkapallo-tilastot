@@ -25,11 +25,9 @@ struct TeamBadge: View {
         let url = store.crestURL(for: name)
         ZStack {
             if let logo {
-                Circle().fill(Color.white.opacity(0.1))
                 Image(nsImage: logo)
                     .resizable()
                     .scaledToFit()
-                    .padding(size * 0.12)
             } else {
                 Circle().fill(Color(hue: hue, saturation: 0.45, brightness: 0.5))
                 Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
@@ -115,7 +113,50 @@ struct GhostButtonStyle: ButtonStyle {
                 .fill(configuration.isPressed ? Theme.panelRaised.opacity(0.6) : Theme.panelRaised))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Theme.stroke, lineWidth: 1))
+            // Painallus tuntuu heti: pieni skaalaus, nopea ease-out.
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
+}
+
+/// Teemaan sopiva kytkin (ei järjestelmän sinistä).
+struct ThemedSwitchStyle: ToggleStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            HStack(spacing: 10) {
+                ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                    Capsule().fill(configuration.isOn ? Theme.floodlight : Theme.panelRaised)
+                        .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
+                    Circle().fill(Theme.chalk).padding(3)
+                }
+                .frame(width: 38, height: 22)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: configuration.isOn)
+                configuration.label
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(configuration.isOn ? "Päällä" : "Pois")
+    }
+}
+
+/// Tekstikenttä teeman ilmeellä.
+struct ThemedFieldModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .font(Theme.label(13))
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.panelRaised))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
+    }
+}
+
+extension View {
+    func themedField() -> some View { modifier(ThemedFieldModifier()) }
 }
 
 struct StarRating: View {
@@ -185,6 +226,54 @@ struct FilterMenu: View {
             .frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.panelRaised))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+}
+
+/// Alasvetovalikon ulkoasu, jota käytetään rajausvalikoissa.
+struct MenuLabel: View {
+    let text: String
+    var icon: String? = nil
+    var active = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon {
+                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(active ? Theme.floodlight : Theme.chalkMuted)
+            }
+            Text(text)
+                .font(Theme.label(13))
+                .foregroundStyle(active ? Theme.chalk : Theme.chalkMuted)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9))
+                .foregroundStyle(Theme.chalkMuted)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.panelRaised))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .strokeBorder(active ? Theme.floodlight.opacity(0.5) : Theme.stroke, lineWidth: 1))
+    }
+}
+
+/// Alaraja-valinta ("Ottelut 5+"). Arvo 0 = ei rajaa.
+struct ThresholdMenu: View {
+    let title: String
+    let options: [Int]
+    @Binding var value: Int
+
+    var body: some View {
+        Menu {
+            Button("Ei rajaa") { value = 0 }
+            Divider()
+            ForEach(options, id: \.self) { option in
+                Button("\(option)+") { value = option }
+            }
+        } label: {
+            MenuLabel(text: value == 0 ? title : "\(title) \(value)+", active: value != 0)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

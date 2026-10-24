@@ -12,6 +12,9 @@ struct Match: Identifiable, Hashable {
     var homeGoals: Int?
     var awayGoals: Int?
     var status: Status
+    /// Puoliaikatulos, jos saatavilla.
+    var homeHalf: Int? = nil
+    var awayHalf: Int? = nil
 }
 
 struct StandingRow: Identifiable, Hashable {
@@ -82,4 +85,25 @@ enum StandingsCalculator {
                                points: a.points, form: Array(form))
         }
     }
+}
+
+/// Maali ottelun tapahtumalistassa.
+struct GoalEvent: Identifiable, Hashable {
+    let minute: Int
+    let extra: Int?
+    let isHome: Bool
+    let scorer: String
+    let assist: String?
+    /// "OWN" (oma maali) tai "PENALTY" (rangaistuspotku)
+    let kind: String?
+
+    var id: String { "\(isHome)-\(minute)-\(extra ?? 0)-\(scorer)" }
+}
+
+/// Joukkueen yksittäinen tulos muotolistaa varten.
+struct FormResult: Identifiable, Hashable {
+    let id: String
+    /// "W", "D" tai "L"
+    let code: String
+    let text: String
 }

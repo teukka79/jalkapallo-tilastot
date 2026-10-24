@@ -1,8 +1,8 @@
 {
-  "name": "jalkapallo-laukaustilasto",
-  "productName": "Jalkapallon Laukaustilasto",
-  "version": "0.1.0",
-  "description": "Jalkapallon pelaajatilastot, sarjataulukot ja otteluohjelmat kuudelle sarjalle",
+  "name": "jalkapallotilastot",
+  "productName": "Jalkapallotilastot",
+  "version": "0.2.0",
+  "description": "Jalkapallon pelaajatilastot, sarjataulukot, otteluohjelmat ja kertoimet yhdelletoista sarjalle",
   "author": "Teukka",
   "main": "main.js",
   "private": true,
@@ -16,21 +16,37 @@
   },
   "build": {
     "appId": "fi.teukka.jalkapallolaukaustilasto",
-    "productName": "Jalkapallon Laukaustilasto",
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["main.js", "preload.js", "renderer/**/*", "assets/**/*", "package.json"],
+    "productName": "Jalkapallotilastot",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Jalkapallon Laukaustilasto",
+      "shortcutName": "Jalkapallotilastot",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
     },
-    "artifactName": "Jalkapallon-Laukaustilasto-Setup-${version}.exe"
+    "artifactName": "Jalkapallotilastot-Setup-${version}.exe"
   }
 }

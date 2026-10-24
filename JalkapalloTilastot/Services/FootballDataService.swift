@@ -53,6 +53,7 @@ struct FootballDataService {
             struct Score: Decodable {
                 struct Goals: Decodable { let home: Int?; let away: Int? }
                 let fullTime: Goals
+                let halfTime: Goals?
             }
             let id: Int
             let utcDate: String
@@ -104,13 +105,108 @@ struct FootballDataService {
                                 matchday: item.matchday ?? 0, date: date,
                                 home: item.homeTeam.display, away: item.awayTeam.display,
                                 homeGoals: item.score.fullTime.home, awayGoals: item.score.fullTime.away,
-                                status: status))
+                                status: status,
+                                homeHalf: item.score.halfTime?.home, awayHalf: item.score.halfTime?.away))
         }
         return (result, crests)
     }
 
-    private func fetch<T: Decodable>(_ path: String) async throws -> T {
-        var request = URLRequest(url: base.appendingPathComponent(path))
+    // MARK: Useiden sarjojen ottelut aikavälillä
+
+    private struct RangeDTO: Decodable {
+        struct Item: Decodable {
+            struct Comp: Decodable { let code: String? }
+            let id: Int
+            let utcDate: String
+            let status: String
+            let matchday: Int?
+            let competition: Comp
+            let homeTeam: TeamDTO
+            let awayTeam: TeamDTO
+            let score: MatchesDTO.Item.Score
+        }
+        let matches: [Item]
+    }
+
+    /// Kaikkien sarjojen ottelut päivämäärävälillä (yyyy-MM-dd) yhdellä kyselyllä; vain tämän appin football-data-sarjat.
+    func matches(from: String, to: String) async throws -> (matches: [Match], crests: [String: String]) {
+        let dto: RangeDTO = try await fetch("matches", query: ["dateFrom": from, "dateTo": to])
+        let parser = ISO8601DateFormatter()
+        var crests: [String: String] = [:]
+        var result: [Match] = []
+        for item in dto.matches {
+            guard let code = item.competition.code, let league = League.from(code: code),
+                  league.source == .footballData, let date = parser.date(from: item.utcDate) else { continue }
+            if let crest = item.homeTeam.crest { crests[item.homeTeam.display] = crest }
+            if let crest = item.awayTeam.crest { crests[item.awayTeam.display] = crest }
+            let status: Match.Status
+            switch item.status {
+            case "FINISHED", "AWARDED": status = .finished
+            case "IN_PLAY", "PAUSED": status = .live
+            default: status = .scheduled
+            }
+            result.append(Match(id: "\(code)-\(item.id)", league: code, matchday: item.matchday ?? 0, date: date,
+                                home: item.homeTeam.display, away: item.awayTeam.display,
+                                homeGoals: item.score.fullTime.home, awayGoals: item.score.fullTime.away,
+                                status: status,
+                                homeHalf: item.score.halfTime?.home, awayHalf: item.score.halfTime?.away))
+        }
+        return (result, crests)
+    }
+
+    // MARK: Joukkueiden kokoonpanot ja ottelun maalit
+
+    private struct TeamsDTO: Decodable {
+        struct Member: Decodable { let name: String; let nationality: String? }
+        struct Team: Decodable { let name: String; let shortName: String?; let squad: [Member]? }
+        let teams: [Team]
+    }
+
+    private struct MatchDetailDTO: Decodable {
+        struct Goal: Decodable {
+            struct Named: Decodable { let name: String? }
+            struct TeamRef: Decodable { let name: String?; let shortName: String? }
+            let minute: Int?
+            let injuryTime: Int?
+            let type: String?
+            let team: TeamRef?
+            let scorer: Named?
+            let assist: Named?
+        }
+        let goals: [Goal]?
+    }
+
+    struct SquadMember { let name: String; let nationality: String }
+
+    /// Sarjan joukkueet pelaajineen (nimi + kansallisuus) yhdellä kyselyllä.
+    func squads(for league: League) async throws -> [(team: String, members: [SquadMember])] {
+        let dto: TeamsDTO = try await fetch("competitions/\(league.rawValue)/teams")
+        return dto.teams.map { team in
+            (team: team.shortName ?? team.name,
+             members: (team.squad ?? []).compactMap { member in
+                 guard let nationality = member.nationality else { return nil }
+                 return SquadMember(name: member.name, nationality: nationality)
+             })
+        }
+    }
+
+    /// Ottelun maalit. Vastaus riippuu API-tason sisällöstä, joten tyhjä lista on normaali tulos.
+    func goals(matchID: Int, home: String) async throws -> [GoalEvent] {
+        let dto: MatchDetailDTO = try await fetch("matches/\(matchID)")
+        return (dto.goals ?? []).compactMap { goal in
+            guard let minute = goal.minute, let scorer = goal.scorer?.name else { return nil }
+            let teamName = goal.team?.shortName ?? goal.team?.name ?? ""
+            return GoalEvent(minute: minute, extra: goal.injuryTime, isHome: teamName == home,
+                             scorer: scorer, assist: goal.assist?.name, kind: goal.type)
+        }
+    }
+
+    private func fetch<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
+        var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)
+        if !query.isEmpty {
+            components?.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        var request = URLRequest(url: components?.url ?? base.appendingPathComponent(path))
         request.setValue(apiKey, forHTTPHeaderField: "X-Auth-Token")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ServiceError.badStatus(0) }

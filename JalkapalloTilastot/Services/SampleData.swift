@@ -32,7 +32,20 @@ enum SampleData {
                       "Union Berlin", "St. Pauli", "Heidenheim", "Köln", "Hamburger SV"],
         .championsLeague: ["Real Madrid", "Bayern München", "Man City", "Arsenal", "PSG", "Inter", "Barcelona",
                            "Liverpool", "Dortmund", "Atlético Madrid", "Juventus", "Leverkusen", "Napoli",
-                           "Benfica", "Sporting CP", "PSV"]
+                           "Benfica", "Sporting CP", "PSV"],
+        .europaLeague: ["Roma", "Aston Villa", "Porto", "Lyon", "Ajax", "Feyenoord", "Real Betis", "Lazio",
+                        "Eintracht Frankfurt", "Celtic", "Braga", "Fenerbahçe", "Galatasaray", "Bologna",
+                        "Rangers", "Salzburg"],
+        .conferenceLeague: ["Fiorentina", "Chelsea", "Villarreal", "Betis", "Legia Warszawa", "Rapid Wien",
+                            "Mainz", "Strasbourg", "Lech Poznań", "AEK Athens", "Shamrock Rovers", "Celje",
+                            "Omonia", "Jagiellonia", "Hearts", "HJK Helsinki"],
+        .saudiProLeague: ["Al-Hilal", "Al-Nassr", "Al-Ittihad", "Al-Ahli", "Al-Shabab", "Al-Taawoun", "Al-Fateh",
+                          "Al-Ettifaq", "Al-Fayha", "Al-Khaleej", "Damac", "Al-Raed", "Al-Okhdood", "Al-Riyadh"],
+        .mls: ["Inter Miami", "LAFC", "LA Galaxy", "Seattle Sounders", "Columbus Crew", "FC Cincinnati",
+               "Philadelphia Union", "New York City FC", "Atlanta United", "Austin FC", "Portland Timbers",
+               "Real Salt Lake", "Vancouver Whitecaps", "Orlando City", "Nashville SC", "Minnesota United"],
+        .superLig: ["Galatasaray", "Fenerbahçe", "Beşiktaş", "Trabzonspor", "Başakşehir", "Samsunspor", "Göztepe",
+                    "Konyaspor", "Kasımpaşa", "Alanyaspor", "Antalyaspor", "Rizespor", "Gaziantep", "Kayserispor"]
     ]
 
     private static let firstNames = ["Luca", "Mateo", "Jonas", "Rafael", "Diego", "Marco", "Lukas", "Hugo", "Pablo",
@@ -83,11 +96,18 @@ enum SampleData {
                 let last = lastNames[Int.random(in: 0..<lastNames.count, using: &rng)]
                 let flag = flags[Int.random(in: 0..<flags.count, using: &rng)]
 
+                var extra = SeededRNG(seed: seed(for: league) &+ UInt64(teamIndex * 31 + slot) &+ 777)
+                let insideShots = max(0, shots - outside)
+                let xgRaw = Double(insideShots) * Double.random(in: 0.08...0.14, using: &extra)
+                    + Double(outside) * Double.random(in: 0.025...0.05, using: &extra)
+                let minutes = apps * Int.random(in: 55...90, using: &extra)
+
                 result.append(Player(id: "\(league.rawValue)-\(teamIndex)-\(slot)",
                                      name: "\(first) \(last)", team: team, league: league.rawValue,
                                      nationality: flag, position: position, appearances: apps,
                                      goals: goals, shots: shots, shotsOnTarget: onTarget,
-                                     shotsOutsideBox: outside, shotsOnTargetOutsideBox: outsideOn))
+                                     shotsOutsideBox: outside, shotsOnTargetOutsideBox: outsideOn,
+                                     xG: (xgRaw * 100).rounded() / 100, minutes: minutes))
             }
         }
         return result
@@ -99,7 +119,7 @@ enum SampleData {
         guard let names = teams[league] else { return [] }
         var rng = SeededRNG(seed: seed(for: league) &+ 11)
         var rounds = roundRobin(names)
-        if league == .championsLeague {
+        if league.zoneStyle == .europeanCup {
             rounds = Array(rounds.prefix(8))
         } else {
             let reversed = rounds.map { round in round.map { pair in (pair.1, pair.0) } }
@@ -125,6 +145,9 @@ enum SampleData {
                     match.homeGoals = poisson(lambdaH, using: &rng)
                     match.awayGoals = poisson(lambdaA, using: &rng)
                     match.status = .finished
+                    let half = halfTimeSplit(id: match.id, home: match.homeGoals ?? 0, away: match.awayGoals ?? 0)
+                    match.homeHalf = half.home
+                    match.awayHalf = half.away
                 }
                 result.append(match)
             }
@@ -132,7 +155,23 @@ enum SampleData {
         return result
     }
 
-    private static func strength(of team: String, in names: [String]) -> Double {
+    /// Jakaa esimerkkiottelun maalit puoliaikoihin ilman satunnaislukugeneraattoria, jotta muut tulokset eivät muutu.
+    private static func halfTimeSplit(id: String, home: Int, away: Int) -> (home: Int, away: Int) {
+        var state = id.unicodeScalars.reduce(UInt64(1469598103934665603)) { ($0 ^ UInt64($1.value)) &* 1099511628211 }
+        var homeEarly = 0
+        var awayEarly = 0
+        for _ in 0..<home {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            if (state >> 33) % 100 < 44 { homeEarly += 1 }
+        }
+        for _ in 0..<away {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            if (state >> 33) % 100 < 44 { awayEarly += 1 }
+        }
+        return (homeEarly, awayEarly)
+    }
+
+    static func strength(of team: String, in names: [String]) -> Double {
         guard let idx = names.firstIndex(of: team) else { return 0.5 }
         return 1.0 - Double(idx) / Double(names.count) * 0.8
     }

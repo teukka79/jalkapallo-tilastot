@@ -91,8 +91,7 @@ select.field { color-scheme: dark; }
 .hcell.hot { color: var(--amber); }
 .hcell:disabled { cursor: default; }
 .scroll { overflow-y: auto; flex: 1; min-height: 0; }
-.scroll::-webkit-scrollbar { width: 10px; }
-.scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .12); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+.scroll::-webkit-scrollbar, .fx-scroll::-webkit-scrollbar, .tm-list::-webkit-scrollbar { display: none; }
 .row { height: 52px; border-bottom: 1px solid var(--stroke); }
 .row:hover { background: rgba(255, 255, 255, .04); }
 .cell { text-align: center; }
@@ -129,8 +128,8 @@ select.field { color-scheme: dark; }
   background: hsl(var(--h) 45% 32%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
 }
 .badge .mono { font: 700 calc(var(--s) * .34) "Segoe UI", sans-serif; letter-spacing: .2px; }
-.badge img { position: absolute; inset: 12%; width: 76%; height: 76%; object-fit: contain; display: none; }
-.badge.logo { background: rgba(255, 255, 255, .10); box-shadow: none; }
+.badge img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: none; }
+.badge.logo { background: none; box-shadow: none; }
 .badge.logo .mono { display: none; }
 .badge.logo img { display: block; }
 
@@ -155,10 +154,11 @@ select.field { color-scheme: dark; }
 .fx-nav { display: flex; align-items: center; gap: 10px; }
 .fx-nav .grow { flex: 1; }
 .fx-nav b { min-width: 84px; text-align: center; }
-.fx-scroll { overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 18px; max-width: 860px; }
+.fx-scroll { overflow-y: auto; flex: 1; min-height: 0; }
+.fx-inner { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
 .fx-day { color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
 .fx-group { background: rgba(15, 26, 30, .92); border: 1px solid var(--stroke); border-radius: 14px; overflow: hidden; }
-.fx-row { display: grid; grid-template-columns: 1fr 90px 1fr; gap: 12px; align-items: center; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--stroke); }
+.fx-row { display: grid; grid-template-columns: 1fr 130px 1fr; gap: 12px; align-items: center; min-height: 56px; padding: 6px 16px; border-bottom: 1px solid var(--stroke); }
 .fx-row:last-child { border-bottom: 0; }
 .fx-team { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; min-width: 0; }
 .fx-team.home { justify-content: flex-end; }
@@ -183,3 +183,54 @@ select.field { color-scheme: dark; }
 .icon-pick.sel { color: var(--amber); }
 .icon-pick.sel img { border-color: var(--amber); }
 .modal .foot { display: flex; justify-content: flex-end; }
+
+/* Otteluohjelma: keskitys, kertoimet, kytkimet */
+.fx-c { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.fx-c .fx-mid { width: 90px; }
+.fx-odds { font-size: 11px; color: var(--muted); white-space: pre; }
+.fx-ctl { display: flex; align-items: center; gap: 10px; }
+.fx-ctl.off { opacity: .4; }
+.sw { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 0; color: var(--muted); font-size: 12px; padding: 0 6px; height: 32px; }
+.sw i { width: 34px; height: 20px; border-radius: 999px; background: var(--raised); border: 1px solid var(--stroke); position: relative; transition: background .15s; }
+.sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.sw.on i { background: rgba(255, 181, 71, .25); border-color: rgba(255, 181, 71, .5); }
+.sw.on i::after { transform: translateX(14px); background: var(--amber); }
+.fx-title .flag, .st-title .flag { align-self: center; }
+.fx-day .flag { vertical-align: middle; margin-right: 4px; }
+
+/* Sarjataulukon tilat */
+.ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.st-row.open { cursor: pointer; }
+.st-row .cell.pts { color: var(--amber); }
+.strip { display: flex; gap: 4px; justify-content: flex-start; align-items: center; }
+.rb {
+  width: 26px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+  font: 700 11px "Segoe UI", sans-serif; color: #0b1215; cursor: default;
+}
+.rb.win, .rb.over { background: var(--pos); }
+.rb.draw { background: var(--amber); }
+.rb.loss, .rb.under { background: var(--neg); }
+.rb.unknown { background: var(--raised); color: var(--muted); border: 1px solid var(--stroke); }
+.hc { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 24px; border-radius: 5px; font-weight: 500; font-size: 14px; }
+.hc.zero { color: var(--muted); }
+.hc.best { background: var(--raised); font-weight: 700; }
+.fhsum { width: 26px; color: var(--amber); font-size: 15px; }
+.fh { width: 22px; height: 22px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); }
+.fh.on { background: var(--raised); color: var(--chalk); }
+.legend .grow { flex: 1; }
+.empty span { text-align: center; font-size: 12px; }
+
+/* Joukkueen ikkuna */
+.modal.wide { width: 640px; }
+.tm-head { display: flex; align-items: center; gap: 14px; }
+.tm-head h2 { margin: 0 0 4px; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.tile { background: rgba(15, 26, 30, .92); border: 1px solid var(--stroke); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.tile small { color: var(--muted); font-size: 11px; }
+.tile b { font-size: 18px; }
+.tm-list { max-height: 330px; overflow-y: auto; background: rgba(15, 26, 30, .92); border: 1px solid var(--stroke); border-radius: 12px; }
+.tm-row { display: flex; align-items: center; gap: 10px; height: 50px; padding: 0 14px; border-bottom: 1px solid var(--stroke); }
+.tm-row:last-child { border-bottom: 0; }
+.tm-row > .muted:first-child { width: 44px; }
+.tm-opp { flex: 1; font-weight: 600; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tm-score { width: 58px; text-align: center; font-size: 15px; }

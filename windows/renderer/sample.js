@@ -8,6 +8,11 @@
     SA: ['Inter', 'Milan', 'Juventus', 'Napoli', 'Atalanta', 'Roma', 'Lazio', 'Fiorentina', 'Bologna', 'Torino', 'Genoa', 'Udinese', 'Como', 'Cagliari', 'Parma', 'Lecce', 'Sassuolo', 'Cremonese', 'Pisa', 'Verona'],
     FL1: ['PSG', 'Marseille', 'Monaco', 'Lyon', 'Lille', 'Nice', 'Lens', 'Rennes', 'Strasbourg', 'Brest', 'Toulouse', 'Nantes', 'Auxerre', 'Angers', 'Le Havre', 'Lorient', 'Metz', 'Paris FC'],
     BL1: ['Bayern München', 'Dortmund', 'Leverkusen', 'RB Leipzig', 'Eintracht Frankfurt', 'Stuttgart', 'Freiburg', 'Wolfsburg', 'Hoffenheim', 'Gladbach', 'Werder Bremen', 'Mainz', 'Augsburg', 'Union Berlin', 'St. Pauli', 'Heidenheim', 'Köln', 'Hamburger SV'],
+    EL: ['Roma', 'Aston Villa', 'Porto', 'Lyon', 'Ajax', 'Feyenoord', 'Betis', 'Lazio', 'Eintracht Frankfurt', 'Celtic', 'Braga', 'Fenerbahçe', 'Galatasaray', 'Bologna', 'Rangers', 'Salzburg'],
+    UECL: ['Fiorentina', 'Chelsea', 'Villarreal', 'Legia Warszawa', 'Rapid Wien', 'Mainz', 'Strasbourg', 'Lech Poznań', 'AEK Athens', 'Shamrock Rovers', 'Celje', 'Omonia', 'Jagiellonia', 'Hearts', 'HJK Helsinki', 'Sparta Praha'],
+    SPL: ['Al-Hilal', 'Al-Nassr', 'Al-Ittihad', 'Al-Ahli', 'Al-Shabab', 'Al-Taawoun', 'Al-Fateh', 'Al-Ettifaq', 'Al-Fayha', 'Al-Khaleej', 'Damac', 'Al-Riyadh', 'Al-Okhdood', 'Al-Kholood'],
+    MLS: ['Inter Miami', 'LAFC', 'LA Galaxy', 'Seattle Sounders', 'Columbus Crew', 'FC Cincinnati', 'Philadelphia Union', 'New York City FC', 'Atlanta United', 'Austin FC', 'Portland Timbers', 'Real Salt Lake', 'Vancouver Whitecaps', 'Orlando City', 'Nashville SC', 'Minnesota United'],
+    TUR: ['Galatasaray', 'Fenerbahçe', 'Beşiktaş', 'Trabzonspor', 'Başakşehir', 'Samsunspor', 'Göztepe', 'Konyaspor', 'Kasımpaşa', 'Alanyaspor', 'Antalyaspor', 'Rizespor', 'Gaziantep', 'Kayserispor'],
     CL: ['Real Madrid', 'Bayern München', 'Man City', 'Arsenal', 'PSG', 'Inter', 'Barcelona', 'Liverpool', 'Dortmund', 'Atlético Madrid', 'Juventus', 'Leverkusen', 'Napoli', 'Benfica', 'Sporting CP', 'PSV']
   };
   const FIRST = ['Luca', 'Mateo', 'Jonas', 'Rafael', 'Diego', 'Marco', 'Lukas', 'Hugo', 'Pablo', 'Andre', 'Felix', 'Nico', 'Samuel', 'Tomas', 'Emil', 'Victor', 'Karim', 'Jules', 'Enzo', 'Bruno', 'Leon', 'Adrian', 'Milan', 'Oscar', 'Theo', 'Ivan', 'Rui', 'Sven'];
@@ -94,7 +99,7 @@
     const names = TEAMS[code] || [];
     const r = rng(seedOf(code) + 11);
     let rounds = roundRobin(names);
-    if (code === 'CL') rounds = rounds.slice(0, 8);
+    if (code === 'CL' || code === 'EL' || code === 'UECL') rounds = rounds.slice(0, 8);
     else rounds = rounds.concat(rounds.map((rd) => rd.map(([h, a]) => [a, h])));
 
     const strength = (team) => {
@@ -119,6 +124,11 @@
           m.homeGoals = poisson(lH, r);
           m.awayGoals = poisson(lA, r);
           m.status = 'finished';
+          // Puoliaikatulos: osa maaleista tehty ensimmäisellä jaksolla
+          const hr = rng(seedOf(code) + ri * 1009 + i * 31);
+          const split = (g) => { let n = 0; for (let k = 0; k < g; k++) if (hr() < 0.45) n++; return n; };
+          m.homeHalf = split(m.homeGoals);
+          m.awayHalf = split(m.awayGoals);
         }
         out.push(m);
       });

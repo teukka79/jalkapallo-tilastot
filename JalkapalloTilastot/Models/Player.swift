@@ -27,6 +27,22 @@ struct Player: Identifiable, Codable, Hashable {
     var shotsOutsideBox: Int
     /// Maalia kohti -laukaukset rangaistusalueen ulkopuolelta
     var shotsOnTargetOutsideBox: Int
+    /// Maaliodottama (xG) ja pelatut minuutit; puuttuvat vanhoista tuonneista
+    var xG: Double? = nil
+    var minutes: Int? = nil
+
+    /// Maalit miinus xG: positiivinen = tehnyt enemmän kuin laukausten laatu antaisi odottaa
+    var xGDifference: Double? { xG.map { Double(goals) - $0 } }
+
+    var xGPerShot: Double? {
+        guard let xG, shots > 0 else { return nil }
+        return xG / Double(shots)
+    }
+
+    var shotsPer90: Double? {
+        guard let minutes, minutes > 0 else { return nil }
+        return Double(shots) / Double(minutes) * 90
+    }
 
     var onTargetPercent: Double {
         shots > 0 ? Double(shotsOnTarget) / Double(shots) * 100 : 0
