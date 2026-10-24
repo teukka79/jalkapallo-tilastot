@@ -234,3 +234,47 @@ select.field { color-scheme: dark; }
 .tm-row > .muted:first-child { width: 44px; }
 .tm-opp { flex: 1; font-weight: 600; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tm-score { width: 58px; text-align: center; font-size: 15px; }
+
+/* Ottelun tilastoikkuna */
+.fx-row.open, .tm-row.open { cursor: pointer; }
+.fx-row.open:hover, .tm-row.open:hover { background: rgba(255, 255, 255, .04); }
+.modal-bg.top { z-index: 20; }
+.modal.match { width: 640px; height: 740px; max-height: 92vh; padding: 0; gap: 0; overflow: hidden; }
+.mm-head { padding: 20px; display: flex; flex-direction: column; gap: 16px; border-bottom: 1px solid var(--stroke); }
+.mm-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.mm-score { display: flex; align-items: center; gap: 18px; }
+.mm-team { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; text-align: center; }
+.mm-mid { width: 130px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.mm-mid b { font-size: 34px; }
+.mm-mid small { font-weight: 600; font-size: 11px; color: var(--muted); }
+.mm-mid .live { color: var(--neg); }
+.mm-forms { display: flex; align-items: flex-start; }
+.mm-form { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.mm-form small { font-size: 10px; color: var(--muted); }
+.mm-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.mm-body::-webkit-scrollbar { display: none; }
+.mpanel { background: rgba(15, 26, 30, .92); border: 1px solid var(--stroke); border-radius: 14px; overflow: hidden; flex: none; }
+.mp-title { text-align: center; padding: 9px 0; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; color: var(--muted); background: rgba(22, 37, 42, .7); }
+.mp-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.mp-body.stats { gap: 16px; }
+.goal { display: grid; grid-template-columns: 1fr 24px 1fr; gap: 10px; font-size: 12px; font-weight: 500; }
+.goal .l { text-align: right; } .goal i { font-style: normal; text-align: center; }
+.stat { display: flex; flex-direction: column; gap: 7px; }
+.stat-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+.stat-top .sl { font-size: 12px; font-weight: 600; }
+.sv { display: flex; align-items: baseline; gap: 4px; }
+.sv.r { justify-content: flex-end; }
+.sv b { font-size: 13px; } .sv small { font-size: 10px; color: var(--muted); }
+.stat-bars { display: flex; gap: 4px; height: 6px; }
+.stat-bars .half { flex: 1; background: rgba(233, 240, 234, .06); border-radius: 999px; display: flex; overflow: hidden; }
+.stat-bars .half.l { justify-content: flex-end; }
+.stat-bars i { display: block; height: 100%; border-radius: 999px; background: rgba(233, 240, 234, .55); }
+.stat-bars i.lead { background: var(--amber); }
+
+/* Liput sarjachipeissä ja pelaajan nimen alla */
+.chip .flag img { width: 18px; height: 13px; }
+.chip .flag .code { font-size: 9px; }
+.psub .flag img { width: 16px; height: 12px; }
+.psub .flag .code { font-size: 9px; }
+
+.warn { color: var(--amber); }

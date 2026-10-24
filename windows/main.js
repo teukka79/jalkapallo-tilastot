@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, nativeImage, net, safeStorage, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const understat = require('./understat');
 
 // Sovelluksen nimi vaihtui (Jalkapallon Laukaustilasto -> Jalkapallotilastot): käytetään vanhaa tallennuskansiota,
 // jotta avain, arvostelut ja tuodut pelaajat säilyvät päivityksessä.
@@ -9,7 +10,7 @@ app.setPath('userData', path.join(app.getPath('appData'), 'Jalkapallon Laukausti
 
 const ICON_FILES = { night: 'IconA.png', floodlight: 'IconB.png', pitchLine: 'IconC.png' };
 // football-data.org: sarjakohtaiset haut sekä päivämääräväli kaikille sarjoille
-const FD_PATH = /^\/(competitions\/(CL|PL|PD|SA|FL1|BL1)\/(standings|matches)|matches\?dateFrom=\d{4}-\d{2}-\d{2}&dateTo=\d{4}-\d{2}-\d{2})$/;
+const FD_PATH = /^\/(competitions\/(CL|PL|PD|SA|FL1|BL1)\/(standings|matches)|matches\?dateFrom=\d{4}-\d{2}-\d{2}&dateTo=\d{4}-\d{2}-\d{2}|matches\/\d{1,10}|competitions\/(PL|PD|SA|FL1|BL1)\/teams)$/;
 const ESPN_SLUG = /^[a-z0-9.]{3,32}$/;
 const ESPN_KINDS = new Set(['scoreboard', 'standings', 'summary']);
 const ESPN_QUERY = new Set(['dates', 'event']);
@@ -21,6 +22,7 @@ let win = null;
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 const playersFile = () => path.join(app.getPath('userData'), 'players.json');
 const oddsFile = () => path.join(app.getPath('userData'), 'odds-cache.json');
+const shotsCacheFile = () => path.join(app.getPath('userData'), 'understat-shots.json');
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -82,7 +84,23 @@ function createWindow() {
 
 ipcMain.handle('store:load', () => {
   const settings = readJson(settingsFile(), {});
-  const players = readJson(playersFile(), null);
+  const imported = readJson(playersFile(), null);
+  let players = Array.isArray(imported) && imported.length ? imported : null;
+  let playersSource = 'none';
+  let playersUpdated = null;
+  if (players) {
+    playersSource = String(settings.playersKind || '').startsWith('understat') ? 'understat' : 'imported';
+    try { playersUpdated = fs.statSync(playersFile()).mtime.toISOString(); } catch { /* ei aikaa */ }
+  }
+  if (!players) {
+    // Sovelluksen mukana tuleva oikea pelaajadata (Understat)
+    const bundled = path.join(__dirname, 'data', 'players.json');
+    const data = readJson(bundled, null);
+    if (Array.isArray(data) && data.length) {
+      players = data; playersSource = 'bundled';
+      try { playersUpdated = fs.statSync(bundled).mtime.toISOString(); } catch { /* ei aikaa */ }
+    }
+  }
   return {
     apiKey: unpackKey(settings, 'apiKey'),
     oddsKey: unpackKey(settings, 'oddsKey'),
@@ -90,7 +108,8 @@ ipcMain.handle('store:load', () => {
     prefs: settings.prefs && typeof settings.prefs === 'object' ? settings.prefs : {},
     ratings: settings.ratings || {},
     icon: ICON_FILES[settings.icon] ? settings.icon : 'night',
-    players: Array.isArray(players) && players.length ? players : null
+    players, playersSource, playersUpdated, playersPartial: settings.playersKind === 'understat-partial',
+    nationalities: settings.nationalities && typeof settings.nationalities === 'object' ? settings.nationalities : {}
   };
 });
 
@@ -106,6 +125,7 @@ ipcMain.handle('store:save', (_e, patch) => {
     }
     if ('ratings' in patch && patch.ratings && typeof patch.ratings === 'object') settings.ratings = patch.ratings;
     if ('icon' in patch && ICON_FILES[patch.icon]) settings.icon = patch.icon;
+    if ('nationalities' in patch && patch.nationalities && typeof patch.nationalities === 'object') settings.nationalities = patch.nationalities;
     if ('prefs' in patch && patch.prefs && typeof patch.prefs === 'object') {
       settings.prefs = { hidePast: patch.prefs.hidePast !== false };
     }
@@ -207,15 +227,68 @@ ipcMain.handle('odds:get', async (_e, sport, key, force) => {
   return { status: res.status, entries: stale, remaining: rem };
 });
 
-ipcMain.handle('players:save', (_e, players) => {
+function setPlayersKind(kind) {
+  const settings = readJson(settingsFile(), {});
+  if (kind) settings.playersKind = kind; else delete settings.playersKind;
+  writeJson(settingsFile(), settings);
+}
+
+ipcMain.handle('players:save', (_e, players, kind) => {
   if (!Array.isArray(players)) return false;
   writeJson(playersFile(), players);
+  setPlayersKind(kind === 'understat' || kind === 'understat-partial' ? kind : 'import');
   return true;
 });
 
 ipcMain.handle('players:clear', () => {
   try { fs.unlinkSync(playersFile()); } catch { /* ei tiedostoa */ }
+  setPlayersKind(null);
   return true;
+});
+
+// Understat-haku: vain moduulin rakentamat understat.com-osoitteet
+async function understatGet(url, opts = {}) {
+  const headers = { Accept: opts.ajax ? 'application/json, text/javascript, */*; q=0.01' : 'text/html,application/xhtml+xml,*/*' };
+  if (opts.ajax) headers['X-Requested-With'] = 'XMLHttpRequest';
+  if (opts.referer) headers.Referer = opts.referer;
+  let last = new Error('haku epäonnistui');
+  for (let i = 0; i < 3; i++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    try {
+      const res = await net.fetch(url, { headers, signal: ctrl.signal });
+      if (res.status === 429 || res.status >= 500) throw new Error('HTTP ' + res.status);
+      if (!res.ok) { const err = new Error('HTTP ' + res.status); err.noRetry = true; throw err; }
+      return await res.text();
+    } catch (e) {
+      last = e;
+      if (e && e.noRetry) break;
+      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw last;
+}
+
+let playersFetch = null;
+ipcMain.handle('players:fetch', () => {
+  if (playersFetch) return playersFetch;
+  const send = (p) => { try { if (win && !win.isDestroyed()) win.webContents.send('players:progress', p); } catch { /* ikkuna suljettu */ } };
+  playersFetch = (async () => {
+    const year = understat.defaultSeasonYear();
+    const stored = readJson(shotsCacheFile(), {});
+    const cache = { [year]: stored[year] || {} }; // vain kuluva kausi säilytetään
+    try {
+      const r = await understat.fetchPlayers({ getText: understatGet, year, cache, onProgress: send });
+      fs.mkdirSync(path.dirname(shotsCacheFile()), { recursive: true });
+      fs.writeFileSync(shotsCacheFile(), JSON.stringify(cache));
+      return { ok: true, players: r.players, failed: r.failed };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  })().finally(() => { playersFetch = null; });
+  return playersFetch;
 });
 
 ipcMain.handle('players:import', async () => {

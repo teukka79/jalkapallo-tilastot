@@ -7,6 +7,7 @@ Windows-versio samasta sovelluksesta kuin macOS-versio (Electron + HTML/CSS/JS).
 - **Yksitoista sarjaa:** Mestarien liiga, Eurooppa-liiga, Konferenssiliiga, Valioliiga, La Liga, Serie A, Ligue 1, Bundesliiga, Saudi Pro League, MLS ja Süper Lig.
 - **Sarjataulukko:** Taulukko (Kunto-merkit V/T/H ja ? = seuraava ottelu), Yli/Alle (rajat 0.5–6.5) ja HT/FT. Kaikissa lajittelu otsikoista ja selitteet hiirellä, rajaus yhteensä / kotona / vieraissa. Rivin napautus avaa joukkueen viimeiset ottelut.
 - **Otteluohjelma:** menneet päivät piilossa oletuksena (kytkimestä näkyviin), "Kaikki"-valinta näyttää vain tämän päivän ottelut, "Vain meneillään" -suodatin ja vedonlyöntikertoimet pelaamattomille otteluille.
+- **Ottelun tilastoikkuna:** pelatun tai käynnissä olevan ottelun rivin klikkaus avaa tilastot (pallonhallinta, laukaukset, kulmat, syötöt, kortit jne.), maalintekijät ja joukkueiden viimeisimmät tulokset. Tilastot haetaan ESPN:ltä kaikille sarjoille, ja valmiit ottelut tallentuvat välimuistiin.
 - **Pelaajatilastot:** viidelle suurimmalle liigalle (esimerkkidata tai oma JSON).
 
 ## Asennuspaketin rakennus GitHub Actionsilla
