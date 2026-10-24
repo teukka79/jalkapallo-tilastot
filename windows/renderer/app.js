@@ -577,7 +577,7 @@ function shotMapSvg(shots) {
     const info = SHOT_RES[sh[4]] || SHOT_RES.M;
     return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" class="sd ${sh[4] === 'G' ? 'goal' : ''}" style="--c:${info[1]}"><title>${sh[3]}' · ${info[0]} · xG ${sh[2].toFixed(2)} · ${SHOT_SIT[sh[5]] || 'Avopeli'}</title></circle>`;
   }).join('');
-  return `<svg class="pitch" viewBox="-14 -22 ${W + 28} ${H + 36}" role="img" aria-label="Laukauskartta"><g class="plines">${lines}</g>${dots}</svg>`;
+  return `<svg class="shotmap" viewBox="-14 -22 ${W + 28} ${H + 36}" role="img" aria-label="Laukauskartta"><g class="plines">${lines}</g>${dots}</svg>`;
 }
 
 function playerModalView() {

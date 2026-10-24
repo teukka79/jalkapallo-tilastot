@@ -290,10 +290,10 @@ select.field { color-scheme: dark; }
 .pm-stat small { color: var(--muted); font-size: 10.5px; }
 .pm-filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .pm-map { background: #0B1A14; border: 1px solid var(--stroke); border-radius: 12px; padding: 6px; }
-.pitch { width: 100%; height: auto; display: block; }
-.pitch .plines * { fill: none; stroke: rgba(233, 240, 234, .32); stroke-width: 1.4; }
-.pitch .plines .goalpost { stroke: rgba(233, 240, 234, .6); }
-.pitch .plines .spot { fill: rgba(233, 240, 234, .5); stroke: none; }
-.pitch .sd { fill: var(--c); fill-opacity: .55; stroke: var(--c); stroke-width: 1.5; }
-.pitch .sd.goal { fill-opacity: .9; stroke: #fff; stroke-width: 2; }
-.pitch .sd:hover { fill-opacity: 1; }
+.shotmap { width: 100%; height: auto; display: block; }
+.shotmap .plines * { fill: none; stroke: rgba(233, 240, 234, .32); stroke-width: 1.4; }
+.shotmap .plines .goalpost { stroke: rgba(233, 240, 234, .6); }
+.shotmap .plines .spot { fill: rgba(233, 240, 234, .5); stroke: none; }
+.shotmap .sd { fill: var(--c); fill-opacity: .55; stroke: var(--c); stroke-width: 1.5; }
+.shotmap .sd.goal { fill-opacity: .9; stroke: #fff; stroke-width: 2; }
+.shotmap .sd:hover { fill-opacity: 1; }
