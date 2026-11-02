@@ -456,7 +456,25 @@ final class AppStore {
             }
             return result
         }
-        guard hasApiFootballKey else { throw StatsError.needsKey }
+        // Muut sarjat: ESPN ensin (ilmainen, ei avainta), API-Football varalla.
+        var espnError: Error?
+        if let league = League.from(code: match.league) {
+            do {
+                let espn = EspnService()
+                let eventID = try await espn.eventID(for: match, league: league)
+                let result = try await espn.stats(for: match, league: league, eventID: eventID)
+                if match.status == .finished {
+                    matchStats[match.id] = result
+                    if let data = try? JSONEncoder().encode(matchStats) {
+                        try? data.write(to: AppStore.statsFileURL, options: .atomic)
+                    }
+                }
+                return result
+            } catch {
+                espnError = error
+            }
+        }
+        guard hasApiFootballKey else { throw espnError ?? StatsError.needsKey }
 
         let service = ApiFootballService(apiKey: apiFootballKey.trimmingCharacters(in: .whitespaces))
         let result = try await service.stats(for: match)

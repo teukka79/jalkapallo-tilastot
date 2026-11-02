@@ -39,7 +39,7 @@ struct TeamBadge: View {
         .frame(width: size, height: size)
         .task(id: url) {
             guard let url else { logo = nil; return }
-            logo = await CrestLoader.shared.image(for: url)
+            logo = await CrestLoader.shared.image(for: url, side: size)
         }
     }
 }

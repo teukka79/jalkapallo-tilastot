@@ -270,8 +270,27 @@ struct EspnService {
         let boxscore: Box?
     }
 
-    func stats(for match: Match, league: League) async throws -> MatchStats {
-        let eventID = String(match.id.split(separator: "-").last ?? "")
+    /// Etsii ESPN:n ottelutunnuksen päivän ja joukkueiden perusteella, kun ottelun oma tunnus on peräisin muualta (football-data.org).
+    func eventID(for match: Match, league: League) async throws -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd"
+        let days = [-1, 0, 1].compactMap { Calendar.current.date(byAdding: .day, value: $0, to: match.date) }
+            .map(formatter.string(from:))
+        let result = try await matches(for: league, days: days)
+        let home = TeamNames.key(match.home), away = TeamNames.key(match.away)
+        func same(_ name: String, _ key: String) -> Bool {
+            let k = TeamNames.key(name)
+            return k == key || TeamNames.related(k, key)
+        }
+        guard let found = result.matches.first(where: {
+            same($0.home, home) && same($0.away, away) && abs($0.date.timeIntervalSince(match.date)) < 36 * 3600
+        }) else { throw ServiceError.empty("ottelu ESPN:stä") }
+        return String(found.id.split(separator: "-").last ?? "")
+    }
+
+    func stats(for match: Match, league: League, eventID override: String? = nil) async throws -> MatchStats {
+        let eventID = override ?? String(match.id.split(separator: "-").last ?? "")
         let dto: SummaryDTO = try await fetch("\(siteBase)/\(league.espnSlug)/summary", ["event": eventID])
         let teams = dto.boxscore?.teams ?? []
         guard let home = teams.first(where: { $0.homeAway == "home" }) ?? teams.first,

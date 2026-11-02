@@ -1,7 +1,8 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, nativeImage, net, safeStorage, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, nativeImage, net, safeStorage, Menu, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const understat = require('./understat');
 
 // Sovelluksen nimi vaihtui (Jalkapallon Laukaustilasto -> Jalkapallotilastot): käytetään vanhaa tallennuskansiota,
@@ -38,7 +39,9 @@ function writeJson(file, data) {
 
 function iconImage(id) {
   const file = ICON_FILES[id] || ICON_FILES.night;
-  return nativeImage.createFromPath(path.join(__dirname, 'assets', 'icons', file));
+  const img = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icons', file));
+  // Windows ei aina päivitä tehtäväpalkin kuvaketta isosta (1024 px) PNG:stä: pienennetään 256 px:ään.
+  return img.isEmpty() ? img : img.resize({ width: 256, height: 256, quality: 'best' });
 }
 
 // API-avaimet tallennetaan Windowsin salauksella, jos se on käytettävissä.
@@ -58,6 +61,8 @@ function unpackKey(settings, prop) {
   } catch { /* avain ei avaudu, pyydetään uudelleen */ }
   return settings[prop] || '';
 }
+
+if (process.platform === 'win32') app.setAppUserModelId('fi.teukka.jalkapallolaukaustilasto');
 
 function createWindow() {
   const settings = readJson(settingsFile(), {});
@@ -137,9 +142,42 @@ ipcMain.handle('store:save', (_e, patch) => {
   return true;
 });
 
+// Vain nämä osoitteet saa avata selaimessa (asetusten linkit).
+const EXTERNAL_OK = new Set(['https://www.football-data.org/client/register', 'https://the-odds-api.com/']);
+// Logot: ladataan, pienennetään 128 px:ään (terävä näyttökoossa) ja tallennetaan levylle pysyvästi.
+const crestDir = () => path.join(app.getPath('userData'), 'crests');
+ipcMain.handle('crest:get', async (_e, url) => {
+  try {
+    if (typeof url !== 'string' || url.length > 500 || !/^https:\/\//.test(url)) return null;
+    const file = path.join(crestDir(), crypto.createHash('sha256').update(url).digest('hex') + '.png');
+    if (fs.existsSync(file)) return fs.readFileSync(file);
+    const res = await net.fetch(url);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 5 * 1024 * 1024) return null;
+    const img = nativeImage.createFromBuffer(buf);
+    if (img.isEmpty()) return null; // esim. SVG: renderer käyttää alkuperäistä osoitetta
+    const { width, height } = img.getSize();
+    const out = Math.max(width, height) > 128
+      ? img.resize(width >= height ? { width: 128, quality: 'best' } : { height: 128, quality: 'best' }) : img;
+    const png = out.toPNG();
+    fs.mkdirSync(crestDir(), { recursive: true });
+    fs.writeFileSync(file, png);
+    return png;
+  } catch { return null; }
+});
+
+ipcMain.handle('link:open', (_e, url) => {
+  if (!EXTERNAL_OK.has(url)) return false;
+  shell.openExternal(url);
+  return true;
+});
+
 ipcMain.handle('icon:set', (_e, id) => {
   if (!ICON_FILES[id] || !win) return false;
-  win.setIcon(iconImage(id));
+  const img = iconImage(id);
+  if (img.isEmpty()) return false;
+  win.setIcon(img);
   return true;
 });
 

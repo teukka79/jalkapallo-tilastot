@@ -76,7 +76,11 @@ struct FixturesView: View {
         }
         .onChange(of: store.focusLeague) { _, _ in pickCurrentMatchday() }
         .onChange(of: allMatches.count) { _, _ in pickCurrentMatchday() }
-        .sheet(item: $selected) { MatchDetailView(match: $0) }
+        // Tuore haku korvaa vanhan datan, vaikka otteluiden määrä pysyisi samana
+        .onChange(of: store.updatedAt[league.rawValue]) { _, _ in pickCurrentMatchday() }
+        .sheet(item: $selected) { m in
+            if m.status == .scheduled { MatchPreviewView(match: m) } else { MatchDetailView(match: m) }
+        }
         .task(id: "\(hasLive)-\(allLeagues)") {
             // Käynnissä olevien otteluiden tulokset päivittyvät minuutin välein
             guard hasLive else { return }
@@ -227,14 +231,14 @@ struct FixturesView: View {
         .padding(.vertical, rowOdds(match) == nil ? 0 : 6)
         .frame(minHeight: 56)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1) }
-        .background(hovered == match.id && match.status != .scheduled ? Theme.panelRaised.opacity(0.7) : Color.clear)
+        .background(hovered == match.id ? Theme.panelRaised.opacity(0.7) : Color.clear)
         .contentShape(Rectangle())
         .onHover { inside in
             if inside { hovered = match.id } else if hovered == match.id { hovered = nil }
         }
-        .onTapGesture { if match.status != .scheduled { selected = match } }
-        .accessibilityAddTraits(match.status == .scheduled ? [] : .isButton)
-        .help(match.status == .scheduled ? "" : "Näytä ottelun tilastot")
+        .onTapGesture { selected = match }
+        .accessibilityAddTraits(.isButton)
+        .help(match.status == .scheduled ? "Näytä ottelun esikatselu" : "Näytä ottelun tilastot")
     }
 
     /// Kertoimet näytetään vain pelaamattomille otteluille.
@@ -289,9 +293,13 @@ struct FixturesView: View {
         if days.indices.contains(next) { matchday = days[next] }
     }
 
-    /// Ensimmäinen kierros, jolla on vielä pelaamattomia otteluja; muuten viimeinen.
+    /// Kierros, jolla on tämän päivän (tai lähin tuleva) ottelu. Siirretyt vanhat ottelut eivät vie näkymää
+    /// väärälle kierrokselle. Jos tulevia otteluita ei ole, valitaan viimeinen kierros.
     private func pickCurrentMatchday() {
-        let open = allMatches.filter { $0.status != .finished }.map { $0.matchday }.filter { $0 > 0 }.min()
-        matchday = open ?? matchdays.last ?? 1
+        let startOfToday = Calendar.current.startOfDay(for: Date())
+        let upcoming = allMatches
+            .filter { $0.matchday > 0 && $0.date >= startOfToday }
+            .min { $0.date < $1.date }
+        matchday = upcoming?.matchday ?? matchdays.last ?? 1
     }
 }

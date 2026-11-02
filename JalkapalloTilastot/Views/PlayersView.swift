@@ -80,7 +80,7 @@ private struct MatchStrip: View {
         if let lines, !lines.isEmpty {
             let dense = count > 5
             HStack(spacing: dense ? 2 : 3) {
-                ForEach(Array(lines.suffix(count).enumerated()), id: \.offset) { _, line in
+                ForEach(Array(lines.suffix(count).reversed().enumerated()), id: \.offset) { _, line in
                     cell(line, dense: dense)
                 }
             }
@@ -119,6 +119,8 @@ struct PlayersView: View {
     @State private var position: String?
     @State private var watchOnly = false
     @State private var ratedOnly = false
+    @State private var fireOnly = false
+    @State private var todayOnly = false
     @State private var minApps = 0
     @State private var minMinutes = 0
     @State private var sortKey: PlayerSort = .goals
@@ -200,6 +202,18 @@ struct PlayersView: View {
         if let position { list = list.filter { $0.position.rawValue == position } }
         if watchOnly { list = list.filter { store.isWatched($0.id) } }
         if ratedOnly { list = list.filter { store.rating(for: $0.id) > 0 } }
+        if fireOnly { list = list.filter { (store.matchLines[$0.id] ?? []).isOnFire } }
+        if todayOnly {
+            // Pelaajat, joiden joukkueella on ottelu tänään (sarjakohtaiset nimiavaimet lasketaan kerran)
+            var keys: [String: [String]] = [:]
+            for match in store.todayMatches where Calendar.current.isDateInToday(match.date) {
+                keys[match.league, default: []] += [TeamNames.key(match.home), TeamNames.key(match.away)]
+            }
+            list = list.filter { player in
+                let key = TeamNames.key(player.team)
+                return keys[player.league]?.contains { $0 == key || TeamNames.related($0, key) } ?? false
+            }
+        }
         if minApps > 0 { list = list.filter { $0.appearances >= minApps } }
         if minMinutes > 0 { list = list.filter { ($0.minutes ?? 0) >= minMinutes } }
         let query = search.trimmingCharacters(in: .whitespaces)
@@ -261,7 +275,7 @@ struct PlayersView: View {
 
     private func resetFilters() {
         search = ""; team = nil; position = nil
-        watchOnly = false; ratedOnly = false; minApps = 0; minMinutes = 0
+        watchOnly = false; ratedOnly = false; fireOnly = false; todayOnly = false; minApps = 0; minMinutes = 0
     }
 
     // MARK: Osat
@@ -320,6 +334,23 @@ struct PlayersView: View {
                         .foregroundStyle(ratedOnly ? Theme.floodlight : Theme.chalk)
                 }
                 .buttonStyle(GhostButtonStyle())
+
+                Button {
+                    todayOnly.toggle()
+                    if todayOnly { Task { await store.refreshToday() } }
+                } label: {
+                    Label("Tänään", systemImage: todayOnly ? "calendar.circle.fill" : "calendar")
+                        .foregroundStyle(todayOnly ? Theme.floodlight : Theme.chalk)
+                }
+                .buttonStyle(GhostButtonStyle())
+                .help("Vain pelaajat, joiden joukkueella on ottelu tänään")
+
+                Button { fireOnly.toggle() } label: {
+                    Label("Liekki", systemImage: fireOnly ? "flame.fill" : "flame")
+                        .foregroundStyle(fireOnly ? Color(hex: 0xFF8A3D) : Theme.chalk)
+                }
+                .buttonStyle(GhostButtonStyle())
+                .help("Vain pelaajat, joilla on laukaus maalia kohti jokaisessa kolmessa viimeisessä ottelussa")
 
                 Button { showXG.toggle() } label: {
                     Label("xG", systemImage: showXG ? "checkmark.square.fill" : "square")
@@ -409,7 +440,7 @@ struct PlayersView: View {
                 .frame(width: Col.strip, height: 42)
         }
         .buttonStyle(.plain)
-        .help("Viimeisimmät ottelut, joissa pelaaja oli mukana. Mittari seuraa lajittelua. Klikkaa vaihtaaksesi ottelujen määrää (3 / 5 / 10).")
+        .help("Viimeisimmät ottelut, joissa pelaaja oli mukana (uusin vasemmalla). Mittari seuraa lajittelua. Klikkaa vaihtaaksesi ottelujen määrää (3 / 5 / 10).")
     }
 
     private func sortButton(_ title: String, _ key: PlayerSort?, width: CGFloat?,
@@ -472,6 +503,11 @@ private struct PlayerRow: View {
     let onOpen: () -> Void
     @State private var hovering = false
 
+    /// Liekki: vähintään yksi laukaus maalia kohti jokaisessa kolmessa viimeisessä ottelussa.
+    private var onFire: Bool {
+        stripLines?.isOnFire ?? false
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -481,6 +517,12 @@ private struct PlayerRow: View {
                         Text(player.name)
                             .font(Theme.label(14, weight: .semibold))
                             .foregroundStyle(Theme.chalk)
+                        if onFire {
+                            Image(systemName: "flame.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color(hex: 0xFF8A3D))
+                                .help("Laukaus maalia kohti jokaisessa kolmessa viimeisessä ottelussa")
+                        }
                         if watched {
                             Image(systemName: "bookmark.fill").font(.system(size: 10)).foregroundStyle(Theme.floodlight)
                         }
@@ -495,6 +537,7 @@ private struct PlayerRow: View {
                 Spacer(minLength: 0)
             }
             .frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
+            .help("Avaa pelaajan laukauskartta")
 
             Text(player.nationality).font(.system(size: 16)).frame(width: Col.nationality)
             Text(player.position.rawValue)
@@ -526,7 +569,6 @@ private struct PlayerRow: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Avaa pelaajan tiedot")
         .onHover { hovering = $0 }
-        .help("Avaa pelaajan laukauskartta")
     }
 
     private func number(_ text: String, _ key: PlayerSort, _ width: CGFloat) -> some View {

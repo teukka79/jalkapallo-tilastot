@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum StandingsMode: Hashable {
-    case table, overUnder, halfFull
+    case table, overUnder, halfFull, btts
 }
 
 /// Lajitteluperuste kaikissa kolmessa näkymässä.
@@ -28,6 +28,8 @@ struct StandingsView: View {
     @State private var selected: TeamSelection?
     @State private var sort: SortKey = .position
     @State private var ascending = true
+    /// Hiiri seuraavan ottelun "?"-merkin päällä: molempien joukkueiden rivit korostetaan.
+    @State private var highlighted: [String] = []
 
     private enum Zone { case champions, europe, relegation, none }
 
@@ -45,6 +47,7 @@ struct StandingsView: View {
                 case .table: tableContent(games)
                 case .overUnder: overUnderContent(games)
                 case .halfFull: halfFullContent(games)
+                case .btts: bttsContent(games)
                 }
             }
             .panel()
@@ -58,6 +61,7 @@ struct StandingsView: View {
             case .table: sort = .position; ascending = true
             case .overUnder: sort = .over; ascending = false
             case .halfFull: sort = .points; ascending = false
+            case .btts: sort = .over; ascending = false
             }
         }
     }
@@ -81,7 +85,8 @@ struct StandingsView: View {
         HStack(spacing: 14) {
             ThemedToggle(options: [(value: StandingsMode.table, label: "Taulukko"),
                                    (value: StandingsMode.overUnder, label: "Yli/Alle"),
-                                   (value: StandingsMode.halfFull, label: "HT/FT")],
+                                   (value: StandingsMode.halfFull, label: "HT/FT"),
+                                   (value: StandingsMode.btts, label: "BTTS")],
                          selection: $mode)
             ThemedToggle(options: Venue.allCases.map { (value: $0, label: $0.title) }, selection: $venue)
             if mode == .overUnder {
@@ -214,7 +219,7 @@ struct StandingsView: View {
             Column(title: "ME", width: 54, key: .goalDifference, help: "Maaliero: tehdyt maalit miinus päästetyt"),
             Column(title: "P", width: 58, key: .points, help: "Pisteet (voitto 3, tasapeli 1)"),
             Column(title: "Kunto", width: 200, key: .form,
-                   help: "Viiden viimeisimmän ottelun tulokset vanhimmasta uusimpaan. ? = seuraava ottelu",
+                   help: "Viiden viimeisimmän ottelun tulokset uusimmasta vanhimpaan. ? = seuraava ottelu",
                    alignment: .leading)
         ])
         Divider().overlay(Theme.stroke)
@@ -256,13 +261,36 @@ struct StandingsView: View {
         .frame(height: 46)
         .overlay(alignment: .leading) { Rectangle().fill(color(for: rowZone)).frame(width: 3) }
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1) }
+        .background { Rectangle().fill(highlightFill(row.team)) }
         .openable { selected = TeamSelection(name: row.team) }
+    }
+
+    private func isHighlighted(_ team: String) -> Bool {
+        guard !highlighted.isEmpty else { return false }
+        let key = TeamNames.key(team)
+        return highlighted.contains { $0 == key || TeamNames.related($0, key) }
+    }
+
+    private func highlightFill(_ team: String) -> Color {
+        isHighlighted(team) ? Color.white.opacity(0.08) : Color.clear
+    }
+
+    /// "?" = seuraava ottelu: vihje kertoo ottelun, ja hiiri korostaa taulukosta molemmat joukkueet.
+    private func nextBadge(_ next: Match?) -> some View {
+        ResultBadge(kind: .unknown, help: nextText(next))
+            .onHover { setHighlight(next, $0) }
+    }
+
+    /// Korostaa ottelun molempien joukkueiden rivit, kun hiiri on ottelua kuvaavan merkin päällä.
+    private func setHighlight(_ match: Match?, _ inside: Bool) {
+        if inside, let match { highlighted = [TeamNames.key(match.home), TeamNames.key(match.away)] }
+        else { highlighted = [] }
     }
 
     private func teamCell(_ team: String) -> some View {
         HStack(spacing: 10) {
             TeamBadge(name: team, size: 34)
-            Text(team).font(Theme.label(14, weight: .semibold)).foregroundStyle(Theme.chalk)
+            Text(team).font(Theme.label(14, weight: isHighlighted(team) ? .heavy : .semibold)).foregroundStyle(Theme.chalk)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -275,9 +303,10 @@ struct StandingsView: View {
     /// "?" = seuraava ottelu (vihjeessä), sen jälkeen viisi viimeisintä tulosta vanhimmasta uusimpaan.
     private func formStrip(_ games: [TeamGame], next: Match?) -> some View {
         HStack(spacing: 4) {
-            ResultBadge(kind: .unknown, help: nextText(next))
-            ForEach(games.suffix(5)) { game in
+            nextBadge(next)
+            ForEach(Array(games.suffix(5).reversed())) { game in
                 ResultBadge(kind: game.code == "W" ? .win : (game.code == "D" ? .draw : .loss), help: resultText(game))
+                    .onHover { setHighlight(game.match, $0) }
             }
         }
     }
@@ -361,7 +390,8 @@ struct StandingsView: View {
                         .padding(.horizontal, 16)
                         .frame(height: 46)
                         .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1) }
-                        .openable { selected = TeamSelection(name: row.team) }
+                        .background { Rectangle().fill(highlightFill(row.team)) }
+        .openable { selected = TeamSelection(name: row.team) }
                     }
                 }
             }
@@ -370,10 +400,95 @@ struct StandingsView: View {
 
     private func overUnderStrip(_ games: [TeamGame], next: Match?) -> some View {
         HStack(spacing: 4) {
-            ResultBadge(kind: .unknown, help: nextText(next))
+            nextBadge(next)
             ForEach(games.suffix(5)) { game in
                 ResultBadge(kind: Double(game.total) > line ? .over : .under,
                             help: "\(resultText(game)) · maaleja yhteensä \(game.total)")
+                    .onHover { setHighlight(game.match, $0) }
+            }
+        }
+    }
+
+    // MARK: BTTS (molemmat joukkueet tekevät maalin)
+
+    private struct BTTSRow: Identifiable {
+        let team: String
+        let games: [TeamGame]
+        var id: String { team }
+        var played: Int { games.count }
+        var yes: Int { games.filter { $0.goalsFor > 0 && $0.goalsAgainst > 0 }.count }
+        var no: Int { played - yes }
+        var percent: Double { played == 0 ? 0 : Double(yes) / Double(played) * 100 }
+        var recentYes: Int { games.suffix(5).filter { $0.goalsFor > 0 && $0.goalsAgainst > 0 }.count }
+    }
+
+    private func sortedBTTS(_ list: [BTTSRow]) -> [BTTSRow] {
+        func value(_ row: BTTSRow) -> Double {
+            switch sort {
+            case .played: return Double(row.played)
+            case .under: return Double(row.no)
+            case .average: return row.percent
+            case .recentOver: return Double(row.recentYes)
+            default: return Double(row.yes)
+            }
+        }
+        return list.sorted { l, r in
+            if sort == .team { return ascending ? l.team < r.team : l.team > r.team }
+            if let result = ordered(value(l), value(r)) { return result }
+            if l.yes != r.yes { return l.yes > r.yes }
+            if l.percent != r.percent { return l.percent > r.percent }
+            return l.team < r.team
+        }
+    }
+
+    @ViewBuilder
+    private func bttsContent(_ games: TeamGames) -> some View {
+        let names = rows.isEmpty ? games.teamNames : rows.map(\.team)
+        let list = sortedBTTS(names.map { BTTSRow(team: $0, games: games.games(for: $0)) })
+        headerBar([
+            Column(title: "#", width: 40, key: nil, help: "Sija nykyisessä järjestyksessä"),
+            Column(title: "Joukkue", width: nil, key: .team, help: "Joukkueen nimi", alignment: .leading),
+            Column(title: "OTT", width: 44, key: .played, help: "Pelatut ottelut"),
+            Column(title: "Kyllä", width: 54, key: .over, help: "Otteluita, joissa molemmat joukkueet tekivät maalin"),
+            Column(title: "Ei", width: 44, key: .under, help: "Otteluita, joissa ainakin toinen joukkue jäi ilman maalia"),
+            Column(title: "BTTS %", width: 70, key: .average, help: "Kuinka suuressa osassa otteluista molemmat tekivät maalin"),
+            Column(title: "Viimeiset 5", width: 200, key: .recentOver,
+                   help: "Viiden viimeisimmän ottelun BTTS, uusin vasemmalla: K = molemmat tekivät maalin, E = ei. ? = seuraava ottelu",
+                   alignment: .leading)
+        ])
+        Divider().overlay(Theme.stroke)
+        if list.allSatisfy({ $0.played == 0 }) {
+            emptyMessage("Pelattuja otteluita ei ole vielä saatavilla")
+        } else {
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(list.enumerated()), id: \.element.id) { index, row in
+                        HStack(spacing: 0) {
+                            Text("\(index + 1)").font(Theme.number(14, weight: .semibold)).foregroundStyle(Theme.chalk).frame(width: 40)
+                            teamCell(row.team)
+                            cell("\(row.played)", 44)
+                            cell("\(row.yes)", 54)
+                            cell("\(row.no)", 44)
+                            Text(Format.one(row.percent) + " %")
+                                .font(Theme.number(14, weight: .semibold)).foregroundStyle(Theme.floodlight).frame(width: 70)
+                            HStack(spacing: 4) {
+                                nextBadge(games.next(for: row.team))
+                                ForEach(Array(row.games.suffix(5).reversed())) { game in
+                                    let both = game.goalsFor > 0 && game.goalsAgainst > 0
+                                    ResultBadge(kind: both ? .yes : .no,
+                                                help: "\(resultText(game)) · \(both ? "molemmat tekivät maalin" : "ei molemmilta maalia")")
+                                    .onHover { setHighlight(game.match, $0) }
+                                }
+                            }
+                            .frame(width: 200, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 46)
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1) }
+                        .background { Rectangle().fill(highlightFill(row.team)) }
+        .openable { selected = TeamSelection(name: row.team) }
+                    }
+                }
             }
         }
     }
@@ -443,7 +558,8 @@ struct StandingsView: View {
                         .padding(.horizontal, 16)
                         .frame(height: 46)
                         .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1) }
-                        .openable { selected = TeamSelection(name: entry.team) }
+                        .background { Rectangle().fill(highlightFill(entry.team)) }
+        .openable { selected = TeamSelection(name: entry.team) }
                     }
                 }
             }
@@ -547,7 +663,8 @@ struct StandingsView: View {
 
     private func nextText(_ match: Match?) -> String {
         guard let match else { return "Ei tulevia otteluita" }
-        return "Seuraava ottelu: \(match.home) – \(match.away), \(Self.longDate.string(from: match.date))"
+        let date = match.date.formatted(Date.FormatStyle(date: .numeric, time: .omitted).locale(Locale(identifier: "fi_FI")))
+        return "Seuraava ottelu:\n\(match.home) · \(match.away)\n\(date)"
     }
 
     // MARK: Selite ja vyöhykkeet
@@ -617,7 +734,7 @@ private extension View {
 
 /// Pieni värillinen merkki: V/T/H, +/− tai ? (seuraava ottelu).
 struct ResultBadge: View {
-    enum Kind { case win, draw, loss, over, under, unknown }
+    enum Kind { case win, draw, loss, over, under, yes, no, unknown }
 
     let kind: Kind
     let help: String
@@ -629,15 +746,17 @@ struct ResultBadge: View {
         case .loss: return "H"
         case .over: return "+"
         case .under: return "−"
+        case .yes: return "K"
+        case .no: return "E"
         case .unknown: return "?"
         }
     }
 
     private var fill: Color {
         switch kind {
-        case .win, .over: return Theme.positive
+        case .win, .over, .yes: return Theme.positive
         case .draw: return Theme.floodlight
-        case .loss, .under: return Theme.negative
+        case .loss, .under, .no: return Theme.negative
         case .unknown: return Theme.panelRaised
         }
     }

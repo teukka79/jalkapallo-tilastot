@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   loadStore: () => ipcRenderer.invoke('store:load'),
   saveStore: (patch) => ipcRenderer.invoke('store:save', patch),
+  crest: (url) => ipcRenderer.invoke('crest:get', url),
+  openLink: (url) => ipcRenderer.invoke('link:open', url),
   setIcon: (id) => ipcRenderer.invoke('icon:set', id),
   footballData: (apiPath, key) => ipcRenderer.invoke('fd:get', apiPath, key),
   espn: (req) => ipcRenderer.invoke('espn:get', req),

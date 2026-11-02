@@ -8,14 +8,26 @@ import CryptoKit
 final class CrestLoader {
     static let shared = CrestLoader()
 
-    private var memory: [URL: NSImage] = [:]
+    private var originals: [URL: NSImage] = [:]
+    private var memory: [String: NSImage] = [:]
     private var failed: [URL: Date] = [:]
     /// Epäonnistunutta latausta yritetään uudelleen tämän ajan kuluttua (verkkokatko ei jää pysyväksi).
     private let retryAfter: TimeInterval = 120
     private var inflight: [URL: Task<NSImage?, Never>] = [:]
 
-    func image(for url: URL) async -> NSImage? {
-        if let cached = memory[url] { return cached }
+    /// `side` = näyttökoko pisteinä. Iso logo piirretään kerran valmiiksi 2x-kokoon (korkealaatuinen skaalaus),
+    /// jolloin se on terävä eikä SwiftUI joudu pienentämään satojen pikselien kuvaa lennosta.
+    func image(for url: URL, side: CGFloat = 0) async -> NSImage? {
+        let key = "\(url.absoluteString)#\(Int(side))"
+        if let cached = memory[key] { return cached }
+        guard let original = await originalImage(for: url) else { return nil }
+        let result = side > 0 ? Self.scaled(original, to: side) : original
+        memory[key] = result
+        return result
+    }
+
+    private func originalImage(for url: URL) async -> NSImage? {
+        if let cached = originals[url] { return cached }
         if let when = failed[url], Date().timeIntervalSince(when) < retryAfter { return nil }
         if let running = inflight[url] { return await running.value }
 
@@ -23,8 +35,31 @@ final class CrestLoader {
         inflight[url] = task
         let result = await task.value
         inflight[url] = nil
-        if let result { memory[url] = result; failed[url] = nil } else { failed[url] = Date() }
+        if let result { originals[url] = result; failed[url] = nil } else { failed[url] = Date() }
         return result
+    }
+
+    /// Piirtää kuvan neliöön (kuvasuhde säilyy) 2x-tarkkuudella.
+    private static func scaled(_ image: NSImage, to side: CGFloat) -> NSImage {
+        let scale: CGFloat = 2
+        let px = max(1, Int((side * scale).rounded()))
+        guard image.size.width > 0, image.size.height > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return image }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.imageInterpolation = .high
+        let target = CGFloat(px)
+        let ratio = min(target / image.size.width, target / image.size.height)
+        let w = image.size.width * ratio, h = image.size.height * ratio
+        image.draw(in: NSRect(x: (target - w) / 2, y: (target - h) / 2, width: w, height: h),
+                   from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let out = NSImage(size: NSSize(width: side, height: side))
+        out.addRepresentation(rep)
+        return out
     }
 
     private func fetch(_ url: URL) async -> NSImage? {

@@ -83,3 +83,8 @@ struct MatchLine: Hashable, Decodable {
 struct MatchFile: Decodable {
     let matches: [String: [MatchLine]]
 }
+
+extension Array where Element == MatchLine {
+    /// Liekki: vähintään yksi laukaus maalia kohti jokaisessa kolmessa viimeisessä ottelussa.
+    var isOnFire: Bool { count >= 3 && suffix(3).allSatisfy { $0.onTarget >= 1 } }
+}
