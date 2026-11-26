@@ -17,6 +17,34 @@ struct Match: Identifiable, Hashable {
     var awayHalf: Int? = nil
 }
 
+/// Ottelun kortit ja kulmapotkut (ESPN:n ottelutilastoista).
+struct MatchExtras: Codable, Hashable {
+    var homeYellow = 0, awayYellow = 0
+    var homeRed = 0, awayRed = 0
+    var homeCorners = 0, awayCorners = 0
+}
+
+/// Yhden pelaajan suoritus yhdessä ottelussa (ESPN:n ottelun kokoonpanotiedot).
+struct EspnPlayerLine: Codable, Hashable {
+    var name: String
+    var team: String
+    /// ESPN:n paikkalyhenne, esim. "CD-L" tai "F"
+    var position: String
+    var goals: Int
+    var shots: Int
+    var onTarget: Int
+}
+
+/// Ottelun pelaajarivit välimuistissa.
+struct EspnMatchPlayers: Codable, Hashable {
+    var league: String
+    /// "yyyy-MM-dd"
+    var date: String
+    var home: String
+    var away: String
+    var lines: [EspnPlayerLine]
+}
+
 struct StandingRow: Identifiable, Hashable {
     var id: String { team }
     let position: Int

@@ -1,7 +1,7 @@
 {
   "name": "jalkapallotilastot",
   "productName": "Jalkapallotilastot",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Jalkapallon pelaajatilastot, sarjataulukot, otteluohjelmat ja kertoimet yhdelletoista sarjalle",
   "author": "Teukka",
   "main": "main.js",
@@ -25,6 +25,7 @@
       "main.js",
       "preload.js",
       "understat.js",
+      "fotmob.js",
       "renderer/**/*",
       "assets/**/*",
       "data/**/*",

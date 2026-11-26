@@ -60,6 +60,13 @@ struct MatchLine: Hashable, Decodable {
     let outsideOnTarget: Int
     let minutes: Int
 
+    init(date: String, opponent: String, goals: Int, shots: Int, onTarget: Int,
+         outside: Int = 0, outsideOnTarget: Int = 0, minutes: Int = 0) {
+        self.date = date; self.opponent = opponent; self.goals = goals; self.shots = shots
+        self.onTarget = onTarget; self.outside = outside; self.outsideOnTarget = outsideOnTarget
+        self.minutes = minutes
+    }
+
     init(from decoder: Decoder) throws {
         var c = try decoder.unkeyedContainer()
         date = try c.decode(String.self)

@@ -268,6 +268,43 @@ struct EspnService {
             let teams: [TeamBox]?
         }
         let boxscore: Box?
+
+        struct RosterTeam: Decodable {
+            struct Team: Decodable { let displayName: String? }
+            struct Entry: Decodable {
+                struct Athlete: Decodable { let displayName: String? }
+                struct Pos: Decodable { let abbreviation: String? }
+                struct Stat: Decodable { let name: String?; let displayValue: String? }
+                let athlete: Athlete?
+                let position: Pos?
+                let stats: [Stat]?
+            }
+            let team: Team?
+            let roster: [Entry]?
+        }
+        let rosters: [RosterTeam]?
+    }
+
+    /// Ottelun pelaajakohtaiset maalit ja laukaukset. Vain ottelun pelanneet pelaajat tulevat mukaan.
+    func playerLines(eventID: String, league: League) async throws -> [EspnPlayerLine] {
+        let dto: SummaryDTO = try await fetch("\(siteBase)/\(league.espnSlug)/summary", ["event": eventID])
+        var out: [EspnPlayerLine] = []
+        for side in dto.rosters ?? [] {
+            let team = side.team?.displayName ?? ""
+            for entry in side.roster ?? [] {
+                guard let name = entry.athlete?.displayName else { continue }
+                var values: [String: Double] = [:]
+                for stat in entry.stats ?? [] {
+                    if let key = stat.name, let text = stat.displayValue, let number = Double(text) { values[key] = number }
+                }
+                guard (values["appearances"] ?? 0) > 0 else { continue }
+                out.append(EspnPlayerLine(name: name, team: team, position: entry.position?.abbreviation ?? "",
+                                          goals: Int(values["totalGoals"] ?? 0), shots: Int(values["totalShots"] ?? 0),
+                                          onTarget: Int(values["shotsOnTarget"] ?? 0)))
+            }
+        }
+        if out.isEmpty { throw ServiceError.empty("pelaajatilastot") }
+        return out
     }
 
     /// Etsii ESPN:n ottelutunnuksen päivän ja joukkueiden perusteella, kun ottelun oma tunnus on peräisin muualta (football-data.org).
@@ -287,6 +324,28 @@ struct EspnService {
             same($0.home, home) && same($0.away, away) && abs($0.date.timeIntervalSince(match.date)) < 36 * 3600
         }) else { throw ServiceError.empty("ottelu ESPN:stä") }
         return String(found.id.split(separator: "-").last ?? "")
+    }
+
+    /// Ottelun keltaiset, punaiset ja kulmat ESPN:n ottelutunnuksella.
+    func extras(eventID: String, league: League) async throws -> MatchExtras {
+        let dto: SummaryDTO = try await fetch("\(siteBase)/\(league.espnSlug)/summary", ["event": eventID])
+        let teams = dto.boxscore?.teams ?? []
+        guard let home = teams.first(where: { $0.homeAway == "home" }) ?? teams.first,
+              let away = teams.first(where: { $0.homeAway == "away" }) ?? (teams.count > 1 ? teams[1] : nil) else {
+            throw ServiceError.empty("ottelutilastot")
+        }
+        func value(_ box: SummaryDTO.Box.TeamBox, _ name: String) -> Int? {
+            guard let stat = box.statistics?.first(where: { $0.name == name }),
+                  let text = stat.displayValue, let number = Double(text) else { return nil }
+            return Int(number)
+        }
+        // Ilman kulmatietoa ottelulla ei ole käyttökelpoisia tilastoja
+        guard let hc = value(home, "wonCorners"), let ac = value(away, "wonCorners") else {
+            throw ServiceError.empty("kulmatilastot")
+        }
+        return MatchExtras(homeYellow: value(home, "yellowCards") ?? 0, awayYellow: value(away, "yellowCards") ?? 0,
+                           homeRed: value(home, "redCards") ?? 0, awayRed: value(away, "redCards") ?? 0,
+                           homeCorners: hc, awayCorners: ac)
     }
 
     func stats(for match: Match, league: League, eventID override: String? = nil) async throws -> MatchStats {

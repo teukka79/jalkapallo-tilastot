@@ -477,7 +477,7 @@ struct PlayersView: View {
         VStack(spacing: 10) {
             Image(systemName: "sportscourt").font(.system(size: 28)).foregroundStyle(Theme.chalkMuted)
             Text("Ei pelaajia valituilla rajauksilla").font(Theme.label(14, weight: .semibold)).foregroundStyle(Theme.chalk)
-            if let league = store.selectedLeague, !league.hasPlayerStats, !store.playersAreSample {
+            if let league = store.selectedLeague, !league.hasPlayerStats, !league.hasEspnPlayerStats, !league.hasAsaPlayerStats, !store.playersAreSample {
                 Text("\(league.name): pelaajakohtaisia laukaustilastoja ei ole saatavilla. Taulukko ja ottelut löytyvät omilta välilehdiltään.")
                     .font(Theme.label(12)).foregroundStyle(Theme.chalkMuted)
                     .multilineTextAlignment(.center).frame(maxWidth: 380)

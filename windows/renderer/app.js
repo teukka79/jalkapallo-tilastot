@@ -38,6 +38,7 @@ const S = {
   ratings: {}, apiKey: '', oddsKey: '', oddsRemaining: null, oddsError: '', odds: {}, icon: 'night',
   search: '', team: '', position: '', favOnly: false, fireOnly: false, todayOnly: false, sort: 'goals', asc: false,
   matchday: 1, hidePast: true, liveOnly: false,
+  extras: {}, extrasProgress: null,
   stMode: 'table', venue: 'all', line: 2.5, st: { key: 'position', asc: true },
   teamModal: null, matchModal: null, mstats: {}, settingsOpen: false, message: ''
 };
@@ -399,6 +400,7 @@ async function refresh(force = false) {
   }
   S.loading = false; render(code !== focus() ? false : !hadData);
   ensureOdds();
+  if (S.section === 'standings' && (S.stMode === 'cards' || S.stMode === 'corners')) loadExtras(focus());
 }
 
 // Kaikki sarjat: tämän päivän ottelut
@@ -542,29 +544,199 @@ function playersStale() {
 }
 
 async function loadMatches() {
-  try { S.pmatches = (await window.api.playerMatches()) || {}; render(); } catch { /* sarake näyttää viivat */ }
+  try { S.pmatches = Object.assign({}, S.espnLines, S.asaLines, (await window.api.playerMatches()) || {}); render(); } catch { /* sarake näyttää viivat */ }
 }
 
-async function updatePlayers() {
+// -- Pelaajat ESPN:stä: cup-sarjat aina, viisi suurta sarjaa Understatin varapalveluna --
+// ESPN antaa ottelukohtaiset maalit ja laukaukset, mutta ei laukausten sijaintia (ei xG:tä eikä ulkopuolelta-laukauksia).
+const ESPN_PLAYER_LEAGUES = ['CL', 'EL', 'UECL'];
+try { S.espnData = JSON.parse(localStorage.getItem('espnPlayers') || '{}') || {}; } catch { S.espnData = {}; }
+S.espnLines = {};
+function saveEspnData() { try { localStorage.setItem('espnPlayers', JSON.stringify(S.espnData)); } catch { /* ei tallennusta */ } }
+
+function espnPosition(code) {
+  const c = String(code || '').toUpperCase();
+  if (!c || c === 'SUB' || c === 'S') return null;
+  if (c.startsWith('G')) return 'Maalivahti';
+  if (c.startsWith('CD') || c.startsWith('D') || ['LB', 'RB', 'WB', 'SW', 'LWB', 'RWB'].includes(c)) return 'Puolustaja';
+  if (c.startsWith('CF') || c.startsWith('F') || c.startsWith('ST') || c.startsWith('LF') || c.startsWith('RF') || ['SS', 'LW', 'RW'].includes(c)) return 'Hyökkääjä';
+  if (c.startsWith('M') || c.startsWith('CM') || c.startsWith('AM') || c.startsWith('DM') || c.startsWith('LM') || c.startsWith('RM')) return 'Keskikenttä';
+  return null;
+}
+
+// Laskee kausitilastot ja ottelurivit tallennetuista otteluista; codes = null: kaikki sarjat
+function aggregateEspn(codes) {
+  const acc = new Map();
+  Object.values(S.espnData).forEach((m) => {
+    if (codes && !codes.includes(m.l)) return;
+    m.r.forEach(([name, team, pos, g, sh, ot]) => {
+      const id = `espn-${m.l}-${tkey(team)}-${tkey(name)}`;
+      let a = acc.get(id);
+      if (!a) { a = { id, name, team, league: m.l, pos: {}, appearances: 0, goals: 0, shots: 0, onTarget: 0, lines: [] }; acc.set(id, a); }
+      a.appearances++; a.goals += g; a.shots += sh; a.onTarget += ot;
+      const p = espnPosition(pos); if (p) a.pos[p] = (a.pos[p] || 0) + 1;
+      const opp = tkey(team) === tkey(m.h) ? m.a : m.h;
+      a.lines.push([m.d, opp, g, sh, ot, 0, 0, 0]);
+    });
+  });
+  const players = [], lines = {};
+  acc.forEach((a) => {
+    const position = Object.entries(a.pos).sort((x, y) => y[1] - x[1])[0];
+    players.push({ id: a.id, name: a.name, team: a.team, league: a.league, nationality: '', position: position ? position[0] : 'Keskikenttä',
+      appearances: a.appearances, goals: a.goals, shots: a.shots, shotsOnTarget: a.onTarget, shotsOutsideBox: 0, shotsOnTargetOutsideBox: 0 });
+    lines[a.id] = a.lines.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  });
+  return { players, lines };
+}
+
+async function fetchEspnPlayerLines(lg, eventId) {
+  const dto = await espnGet(lg, 'summary', { event: eventId });
+  const out = [];
+  (dto.rosters || []).forEach((side) => {
+    const team = (side.team && side.team.displayName) || '';
+    (side.roster || []).forEach((e) => {
+      const name = e.athlete && e.athlete.displayName;
+      if (!name) return;
+      const v = {};
+      (e.stats || []).forEach((st) => { const n = parseFloat(st.displayValue); if (st.name && Number.isFinite(n)) v[st.name] = n; });
+      if (!(v.appearances > 0)) return;
+      out.push([name, team, (e.position && e.position.abbreviation) || '', v.totalGoals || 0, v.totalShots || 0, v.shotsOnTarget || 0]);
+    });
+  });
+  if (!out.length) throw new Error('ei pelaajatilastoja');
+  return out;
+}
+
+// Hakee puuttuvat pelatut ottelut ESPN:stä (6 yhtä aikaa, valmiit säilyvät välimuistissa). Palauttaa sarjojen pelaajat.
+async function updateEspnPlayers(codes) {
+  const say = (t) => { S.playersStatus = t; const el = document.querySelector('[data-pstatus]'); if (el) el.textContent = t; };
+  for (const code of codes) {
+    const lg = leagueOf(code);
+    if (!lg) continue;
+    say(`ESPN: ${lg.name}…`);
+    let list;
+    try { list = await espnMatches(lg); } catch { continue; }
+    const missing = list.filter((m) => m.status === 'finished' && !S.espnData[m.id]);
+    let done = 0;
+    for (let i = 0; i < missing.length; i += 6) {
+      await Promise.all(missing.slice(i, i + 6).map(async (m) => {
+        try {
+          const r = await fetchEspnPlayerLines(lg, m.id.slice(m.id.indexOf('-') + 1));
+          S.espnData[m.id] = { l: code, d: new Date(m.date).toISOString().slice(0, 10), h: m.home, a: m.away, r };
+        } catch { /* ottelu ilman tietoja ohitetaan */ }
+        done++;
+      }));
+      say(`ESPN: ${lg.name} ${done}/${missing.length}`);
+      saveEspnData();
+    }
+  }
+  const agg = aggregateEspn(codes);
+  S.espnLines = aggregateEspn(null).lines;
+  return agg.players;
+}
+
+// -- MLS-pelaajat American Soccer Analysisista (xG mukana, ei laukausten sijaintia) --
+try { S.asaLines = JSON.parse(localStorage.getItem('asaLines') || '{}') || {}; } catch { S.asaLines = {}; }
+
+async function asaGet(path, query = {}) {
+  const res = await window.api.asa({ path, query });
+  if (res.status <= 0) throw new Error('Yhteys ASA:han epäonnistui');
+  if (res.status < 200 || res.status >= 300) throw new Error(`ASA vastasi virheellä ${res.status}: ${path}`);
+  if (!Array.isArray(res.body)) throw new Error(`ASA: odottamaton vastaus ${path}`);
+  return res.body;
+}
+
+// Palauttaa MLS:n pelaajat ja tallentaa ottelurivit (S.asaLines)
+async function updateAsaPlayers() {
+  const say = (t) => { S.playersStatus = t; const el = document.querySelector('[data-pstatus]'); if (el) el.textContent = t; };
+  say('ASA: MLS…');
+  const season = String(seasonYear(leagueOf('MLS')));
+  const [teams, people, games] = await Promise.all([asaGet('/teams'), asaGet('/players'), asaGet('/games', { season_name: season })]);
+  const teamName = {}; teams.forEach((t) => { if (t.team_id) teamName[t.team_id] = t.team_name || t.team_short_name || t.team_id; });
+  const personName = {}; people.forEach((p) => { if (p.player_id && p.player_name) personName[p.player_id] = p.player_name; });
+  const game = {}; games.forEach((g) => { if (g.game_id) game[g.game_id] = { d: String(g.date_time_utc || '').slice(0, 10), h: g.home_team_id, a: g.away_team_id }; });
+
+  // Ottelukohtaiset rivit pelipaikoittain: yksittäinen vastaus on rajattu 10 000 riviin
+  let rows = [], failures = 0;
+  for (const pos of ['GK', 'CB', 'FB', 'DM', 'CM', 'AM', 'W', 'ST']) {
+    try { rows = rows.concat(await asaGet('/players/xgoals', { season_name: season, split_by_games: 'true', general_position: pos })); } catch { failures++; }
+  }
+  if (failures === 8) rows = await asaGet('/players/xgoals', { season_name: season, split_by_games: 'true' });
+  if (!rows.length) throw new Error('ASA: ei pelaajarivejä');
+
+  const acc = new Map();
+  rows.forEach((r) => {
+    if (!r.player_id || !r.team_id) return;
+    const minutes = Math.round(Number(r.minutes_played) || 0), shots = Math.round(Number(r.shots) || 0);
+    if (minutes <= 0 && shots === 0) return;
+    const id = `MLS-${r.player_id}-${r.team_id}`;
+    let a = acc.get(id);
+    if (!a) { a = { id, name: personName[r.player_id] || r.player_id, team: teamName[r.team_id] || r.team_id, pos: {}, apps: 0, goals: 0, shots: 0, ot: 0, minutes: 0, xg: 0, lines: [] }; acc.set(id, a); }
+    const goals = Math.round(Number(r.goals) || 0), ot = Math.round(Number(r.shots_on_target) || 0);
+    a.apps++; a.goals += goals; a.shots += shots; a.ot += ot; a.minutes += minutes; a.xg += Number(r.xgoals) || 0;
+    if (r.general_position) a.pos[r.general_position] = (a.pos[r.general_position] || 0) + 1;
+    const g = game[r.game_id];
+    const opp = g ? (g.h === r.team_id ? g.a : g.h) : '';
+    a.lines.push([g ? g.d : '', teamName[opp] || '?', goals, shots, ot, 0, 0, minutes]);
+  });
+  const posName = (c) => (c === 'GK' ? 'Maalivahti' : c === 'CB' || c === 'FB' ? 'Puolustaja' : c === 'ST' || c === 'W' ? 'Hyökkääjä' : 'Keskikenttä');
+  const players = [], lines = {};
+  acc.forEach((a) => {
+    const top = Object.entries(a.pos).sort((x, y) => y[1] - x[1])[0];
+    const shots = Math.max(a.shots, a.goals);
+    players.push({ id: a.id, name: a.name, team: a.team, league: 'MLS', nationality: '', position: posName(top ? top[0] : 'CM'),
+      appearances: a.apps, goals: a.goals, shots, shotsOnTarget: Math.min(Math.max(a.ot, a.goals), shots),
+      shotsOutsideBox: 0, shotsOnTargetOutsideBox: 0, xG: Math.round(a.xg * 100) / 100, minutes: a.minutes });
+    lines[a.id] = a.lines.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  });
+  if (!players.length) throw new Error('ASA: pelaajia ei löytynyt');
+  S.asaLines = lines;
+  try { localStorage.setItem('asaLines', JSON.stringify(lines)); } catch { /* ei tallennusta */ }
+  return players;
+}
+
+// scope: vain tämä sarja (null = kaikki)
+async function updatePlayers(scope = null) {
   if (S.updatingPlayers) return;
+  const scoped = scope && leagueOf(scope) ? scope : null;
+  const tryUnderstat = !scoped || !!leagueOf(scoped).stats || scoped === 'MLS';
   S.updatingPlayers = true; S.playersStatus = 'Haetaan pelaajadataa…'; S.playersNote = '';
   render();
-  let res;
-  try { res = await window.api.fetchPlayers(); } catch { res = { ok: false, error: 'yhteys epäonnistui' }; }
-  S.updatingPlayers = false; S.playersStatus = '';
+  let res = { ok: false, error: 'ei haettu' };
+  if (tryUnderstat) {
+    try { res = await window.api.fetchPlayers(scoped); } catch { res = { ok: false, error: 'yhteys epäonnistui' }; }
+    if (scoped && res && res.ok) res = { ...res, players: res.players.filter((p) => p.league === scoped), failed: (res.failed || []).filter((f) => f.league === scoped) };
+  }
   const failed = (res && res.failed) || [];
-  if (!res || !res.ok || !res.players.length) {
-    const why = (res && res.error) || failed.map((f) => `${f.league}: ${f.error}`).join(', ') || 'ei tuloksia';
+  const understatOk = !!(res && res.ok && res.players.length);
+  const why = (res && res.error) || failed.map((f) => `${f.league}: ${f.error}`).join(', ') || 'ei tuloksia';
+  const lost = new Set(!tryUnderstat ? [] : understatOk ? failed.map((f) => f.league)
+    : LEAGUES.filter((l) => l.stats && (!scoped || l.code === scoped)).map((l) => l.code));
+  const mlsFromFotmob = understatOk && res.players.some((p) => p.league === 'MLS');
+  const asaTried = (!scoped || scoped === 'MLS') && !mlsFromFotmob;
+  let asa = [];
+  if (asaTried) { try { asa = await updateAsaPlayers(); } catch { asa = []; } }
+  if (asa.length) lost.delete('MLS');
+  const espnCodes = [...ESPN_PLAYER_LEAGUES.filter((c) => !scoped || c === scoped), ...lost, ...(asaTried && !asa.length ? ['MLS'] : [])];
+  let espn = [];
+  try { espn = espnCodes.length ? await updateEspnPlayers(espnCodes) : []; } catch { espn = []; }
+  S.updatingPlayers = false; S.playersStatus = '';
+  if (!understatOk && !espn.length && !asa.length) {
     S.playersNote = `Pelaajadataa ei saatu päivitettyä (${why}). Vanha data säilyy.`;
     render(); return;
   }
-  const lost = new Set(failed.map((f) => f.league));
-  const kept = S.players.filter((p) => lost.has(p.league)); // epäonnistuneiden sarjojen vanha data säilyy
-  S.players = normalizePlayers([...res.players, ...kept]);
-  S.playersSource = 'understat'; S.playersPartial = lost.size > 0; S.playersUpdated = new Date().toISOString();
+  const espnLeagues = new Set([...espn, ...asa].map((p) => p.league));
+  if (understatOk) res.players.forEach((p) => espnLeagues.add(p.league));
+  const kept = S.players.filter((p) => !espnLeagues.has(p.league)
+    && (scoped ? true : (lost.has(p.league) || ESPN_PLAYER_LEAGUES.includes(p.league) || p.league === 'MLS')));
+  S.players = normalizePlayers([...(understatOk ? res.players : []), ...kept, ...espn, ...asa]);
+  const fellBack = [...lost].filter((c) => espnLeagues.has(c));
+  const partial = lost.size > 0;
+  S.playersSource = 'understat'; S.playersPartial = partial; S.playersUpdated = new Date().toISOString();
   applyNationalities();
-  await window.api.savePlayers(S.players, lost.size ? 'understat-partial' : 'understat');
-  if (lost.size) S.playersNote = `Osa sarjoista jäi päivittämättä: ${failed.map((f) => `${f.league} (${f.error})`).join(', ')}. Yritetään uudelleen seuraavalla päivityksellä.`;
+  await window.api.savePlayers(S.players, partial ? 'understat-partial' : 'understat');
+  if (fellBack.length) S.playersNote = `Laukaustilastojen lähteet (FotMob, Understat) eivät vastanneet (${why}). ${fellBack.join(', ')} haettiin ESPN:stä: xG ja rangaistusalueen ulkopuoliset laukaukset puuttuvat.`;
+  else if (lost.size) S.playersNote = `Osa sarjoista jäi päivittämättä: ${failed.map((f) => `${f.league} (${f.error})`).join(', ')}. Yritetään uudelleen seuraavalla päivityksellä.`;
   render();
   enrichNationalities();
   loadMatches();
@@ -718,6 +890,58 @@ async function espnEventId(lg, m) {
     }
   }
   throw new Error('ESPN:stä ei löytynyt tämän ottelun tilastoja.');
+}
+
+// -- Kortit ja kulmat (ESPN:n ottelutilastot, välimuisti localStorageen) --
+try { S.extras = JSON.parse(localStorage.getItem('extras') || '{}') || {}; } catch { S.extras = {}; }
+const extrasFailed = new Set();
+let extrasBusy = false;
+function saveExtras() { try { localStorage.setItem('extras', JSON.stringify(S.extras)); } catch { /* ei tallennusta */ } }
+
+async function fetchExtras(lg, eventId) {
+  const dto = await espnGet(lg, 'summary', { event: eventId });
+  const teams = (dto.boxscore && dto.boxscore.teams) || [];
+  const home = teams.find((t) => t.homeAway === 'home') || teams[0];
+  const away = teams.find((t) => t.homeAway === 'away') || teams[1];
+  if (!home || !away) throw new Error('ei tilastoja');
+  const val = (t, name) => { const st = (t.statistics || []).find((x) => x.name === name); const v = st ? parseFloat(st.displayValue) : NaN; return Number.isFinite(v) ? v : null; };
+  const hc = val(home, 'wonCorners'), ac = val(away, 'wonCorners');
+  if (hc === null || ac === null) throw new Error('ei kulmatietoja');
+  return { hy: val(home, 'yellowCards') || 0, ay: val(away, 'yellowCards') || 0, hr: val(home, 'redCards') || 0, ar: val(away, 'redCards') || 0, hc, ac };
+}
+
+async function loadExtras(code) {
+  if (extrasBusy) return;
+  const lg = leagueOf(code);
+  const todo = (S.matches[code] || []).filter((m) => m.status === 'finished' && !S.extras[m.id] && !extrasFailed.has(m.id));
+  if (!todo.length) return;
+  extrasBusy = true; S.extrasProgress = 0;
+  const rerender = () => { if (S.section === 'standings' && (S.stMode === 'cards' || S.stMode === 'corners')) render(); };
+  rerender();
+  try {
+    let targets = [];
+    if (srcOf(lg) === 'espn') {
+      targets = todo.map((m) => ({ m, ev: m.id.slice(m.id.indexOf('-') + 1) }));
+    } else {
+      const espn = await espnMatches(lg);
+      todo.forEach((m) => {
+        const h = tkey(m.home), a = tkey(m.away);
+        const f = espn.find((e) => { const eh = tkey(e.home), ea = tkey(e.away); return (eh === h || related(eh, h)) && (ea === a || related(ea, a)) && Math.abs(new Date(e.date) - new Date(m.date)) < 36 * 3600 * 1000; });
+        if (f) targets.push({ m, ev: f.id.slice(f.id.indexOf('-') + 1) }); else extrasFailed.add(m.id);
+      });
+    }
+    let done = 0;
+    for (let i = 0; i < targets.length; i += 6) {
+      await Promise.all(targets.slice(i, i + 6).map(async ({ m, ev }) => {
+        try { S.extras[m.id] = await fetchExtras(lg, ev); } catch { extrasFailed.add(m.id); }
+        done++;
+      }));
+      S.extrasProgress = done / targets.length;
+      saveExtras(); rerender();
+    }
+  } catch { /* verkkovirhe: yritetään uudelleen seuraavalla avauskerralla */ }
+  S.extrasProgress = null; extrasBusy = false;
+  rerender();
 }
 
 function espnGoals(dto) {
@@ -1080,8 +1304,9 @@ function filteredPlayers() {
 function playersView() {
   const lg = S.league ? leagueOf(S.league) : null;
   if (lg && !S.players.some((p) => p.league === lg.code)) {
-    return `<div class="panel"><div class="empty"><b>Pelaajatilastoja ei ole saatavilla tälle sarjalle</b>
-      <span>Pelaajakohtaiset laukaustilastot haetaan vain viidestä suurimmasta liigasta.<br>Sarjataulukko ja otteluohjelma toimivat normaalisti.</span></div></div>`;
+    const espnLg = ESPN_PLAYER_LEAGUES.includes(lg.code) || lg.code === 'MLS';
+    return `<div class="panel"><div class="empty"><b>${espnLg ? 'Pelaajatilastoja ei ole vielä haettu' : 'Pelaajatilastoja ei ole saatavilla tälle sarjalle'}</b>
+      <span>${espnLg ? 'Pelaajat haetaan (cup-sarjat ESPN:stä, MLS American Soccer Analysisista), kun painat Päivitä pelaajat.' : 'Pelaajakohtaiset laukaustilastot haetaan viidestä suurimmasta liigasta ja Euroopan cup-sarjoista.<br>Sarjataulukko ja otteluohjelma toimivat normaalisti.'}</span></div></div>`;
   }
   const rows = filteredPlayers();
   const scope = S.league ? S.players.filter((p) => p.league === S.league) : S.players;
@@ -1239,13 +1464,13 @@ function standingsView() {
   const code = focus(); const lg = leagueOf(code);
   const note = S.league === null ? '<small>· valitse sarja yläpalkista</small>' : '';
   const games = buildGames(S.matches[code] || [], S.venue);
-  const modes = [['table', 'Taulukko'], ['ou', 'Yli/Alle'], ['htft', 'HT/FT'], ['btts', 'BTTS']];
+  const modes = [['table', 'Taulukko'], ['ou', 'Yli/Alle'], ['htft', 'HT/FT'], ['btts', 'BTTS'], ['cards', 'Kortit'], ['corners', 'Kulmat']];
   const controls = `<div class="ctl">
     <div class="seg">${modes.map(([id, l]) => `<button class="${S.stMode === id ? 'sel' : ''}" data-act="stmode" data-v="${id}">${l}</button>`).join('')}</div>
     <div class="seg">${[['all', 'Yhteensä'], ['home', 'Kotona'], ['away', 'Vieraissa']].map(([id, l]) => `<button class="${S.venue === id ? 'sel' : ''}" data-act="venue" data-v="${id}">${l}</button>`).join('')}</div>
     ${S.stMode === 'ou' ? `<div class="seg">${LINES.map((l) => `<button class="${S.line === l ? 'sel' : ''}" data-act="line" data-v="${l}">${l.toFixed(1)}</button>`).join('')}</div>` : ''}
   </div>`;
-  const body = S.stMode === 'table' ? tableMode(code, lg, games) : S.stMode === 'ou' ? overUnderMode(code, games) : S.stMode === 'btts' ? bttsMode(code, games) : htftMode(code, games);
+  const body = S.stMode === 'table' ? tableMode(code, lg, games) : S.stMode === 'ou' ? overUnderMode(code, games) : S.stMode === 'btts' ? bttsMode(code, games) : S.stMode === 'cards' || S.stMode === 'corners' ? extrasMode(code, games, S.stMode) : htftMode(code, games);
   return `<div class="st-title">${lg.flag ? flagHtml(lg.flag) : ''}${esc(lg.name)} ${note}</div>${controls}${body}`;
 }
 
@@ -1342,6 +1567,58 @@ function bttsMode(code, games) {
       <div class="cell num">${r.played}</div><div class="cell num">${r.yes}</div><div class="cell num">${r.no}</div>
       <div class="cell num pts">${fmt1(r.pct)} %</div>
       <div class="strip">${rbNext(games.next(r.team))}${r.g.slice(-5).reverse().map((x) => rb(both(x) ? 'over' : 'under', both(x) ? 'K' : 'E', `${resultHelp(x)} · ${both(x) ? 'molemmat tekivät maalin' : 'ei molemmilta maalia'}`, gameAttr(x))).join('')}</div>
+    </div>`).join('')}</div></div>`;
+}
+
+function extrasMode(code, games, kind) {
+  const cards = kind === 'cards';
+  const names = (S.standings[code] || []).length ? S.standings[code].map((r) => r.team) : games.names;
+  const list = names.map((n) => {
+    const items = games.games(n).filter((g) => S.extras[g.m.id]).map((g) => {
+      const e = S.extras[g.m.id];
+      return { g, y: g.isHome ? e.hy : e.ay, r: g.isHome ? e.hr : e.ar, cf: g.isHome ? e.hc : e.ac, ca: g.isHome ? e.ac : e.hc };
+    });
+    const sum = (f) => items.reduce((t, x) => t + f(x), 0);
+    const avg = (f) => (items.length ? sum(f) / items.length : 0);
+    const last5 = items.slice(-5);
+    return {
+      team: n, items, played: items.length,
+      m1: cards ? sum((x) => x.y) : sum((x) => x.cf), m2: cards ? sum((x) => x.r) : sum((x) => x.ca),
+      m3: cards ? avg((x) => x.y) : avg((x) => x.cf), m4: cards ? avg((x) => x.y + x.r) : avg((x) => x.ca),
+      m5: avg((x) => x.cf + x.ca),
+      recentOver: last5.reduce((t, x) => t + (cards ? x.y + x.r : x.cf + x.ca), 0)
+    };
+  });
+  cmp(list, (r) => r[S.st.key] ?? r.m1, (a, b) => b.m1 - a.m1 || a.team.localeCompare(b.team));
+  const defs = cards ? [
+    ['OTT', 'played', 'Ottelut, joista kortit ovat tiedossa', '48px'], ['Keltaiset', 'm1', 'Joukkueen saamat keltaiset kortit yhteensä', '74px'],
+    ['Punaiset', 'm2', 'Joukkueen saamat punaiset kortit yhteensä', '70px'], ['Kelt./ott', 'm3', 'Keltaisia kortteja keskimäärin per ottelu', '70px'],
+    ['Kortit/ott', 'm4', 'Keltaiset ja punaiset yhteensä keskimäärin per ottelu', '76px']
+  ] : [
+    ['OTT', 'played', 'Ottelut, joista kulmat ovat tiedossa', '48px'], ['Tehdyt', 'm1', 'Joukkueen saamat kulmapotkut yhteensä', '60px'],
+    ['Päästetyt', 'm2', 'Vastustajien saamat kulmapotkut yhteensä', '70px'], ['Teh./ott', 'm3', 'Joukkueen kulmia keskimäärin per ottelu', '66px'],
+    ['Pääst./ott', 'm4', 'Vastustajien kulmia keskimäärin per ottelu', '72px'], ['Yht./ott', 'm5', 'Kulmia yhteensä (molemmat joukkueet) keskimäärin per ottelu', '66px']
+  ];
+  const cols = `40px minmax(180px,1fr) ${defs.map((d) => d[3]).join(' ')} 190px`;
+  const stripHelp = cards ? 'Viiden viimeisimmän ottelun kortit (keltaiset + punaiset), uusin vasemmalla. ? = seuraava ottelu'
+    : 'Viiden viimeisimmän ottelun kulmat yhteensä, uusin vasemmalla. ? = seuraava ottelu';
+  const head = `<div class="head st-cols" style="grid-template-columns:${cols}">
+    ${plainHead('#', 'Sija nykyisessä järjestyksessä')}${sortHead('Joukkue', 'team', 'Joukkueen nimi', true)}
+    ${defs.map((d) => sortHead(d[0], d[1], d[2])).join('')}${sortHead('Viimeiset 5', 'recentOver', stripHelp, true)}</div>`;
+  const prog = S.extrasProgress !== null
+    ? `<div class="xprog"><progress max="1" value="${S.extrasProgress}"></progress><span>Haetaan kortti- ja kulmatietoja… ${Math.round(S.extrasProgress * 100)} %</span></div>` : '';
+  if (list.every((r) => r.played === 0)) {
+    return `<div class="panel">${head}${prog}<div class="empty"><b>${S.extrasProgress !== null ? 'Haetaan tietoja ottelu kerrallaan…' : 'Kortti- ja kulmatietoja ei ole saatavilla tälle sarjalle'}</b></div></div>`;
+  }
+  const cellsOf = (r) => (cards
+    ? [r.played, r.m1, r.m2, null, fmt1(r.m4)].map((v, i) => (i === 3 ? `<div class="cell num pts">${fmt1(r.m3)}</div>` : `<div class="cell num">${v}</div>`))
+    : [r.played, r.m1, r.m2, null, fmt1(r.m4), fmt1(r.m5)].map((v, i) => (i === 3 ? `<div class="cell num pts">${fmt1(r.m3)}</div>` : `<div class="cell num">${v}</div>`))).join('');
+  return `<div class="panel">${head}${prog}<div class="scroll">${list.map((r, i) => `
+    <div class="row st-row st-cols open" data-act="team" data-name="${esc(r.team)}" style="grid-template-columns:${cols}">
+      <div class="pos">${i + 1}</div><div class="team">${badge(r.team, 34)}<span>${esc(r.team)}</span></div>
+      ${cellsOf(r)}
+      <div class="strip">${rbNext(games.next(r.team))}${r.items.slice(-5).reverse().map((x) => rb('count', cards ? x.y + x.r : x.cf + x.ca,
+        `${resultHelp(x.g)} · ${cards ? `keltaiset ${x.y}, punaiset ${x.r}` : `kulmat ${x.cf}–${x.ca}`}`, gameAttr(x.g))).join('')}</div>
     </div>`).join('')}</div></div>`;
 }
 
@@ -1516,6 +1793,7 @@ function onLeagueOrSection() {
   if (S.league === null && S.section === 'fixtures' && !S.todayUpdated) refreshToday();
   refresh();
   ensureOdds();
+  if (S.section === 'standings' && (S.stMode === 'cards' || S.stMode === 'corners')) loadExtras(focus());
 }
 
 document.addEventListener('click', async (e) => {
@@ -1534,7 +1812,8 @@ document.addEventListener('click', async (e) => {
     case 'stsort': setSort(t.dataset.key); render(true); break;
     case 'stmode':
       S.stMode = t.dataset.v;
-      S.st = S.stMode === 'table' ? { key: 'position', asc: true } : S.stMode === 'ou' || S.stMode === 'btts' ? { key: 'over', asc: false } : { key: 'points', asc: false };
+      S.st = S.stMode === 'table' ? { key: 'position', asc: true } : S.stMode === 'ou' || S.stMode === 'btts' ? { key: 'over', asc: false } : S.stMode === 'cards' || S.stMode === 'corners' ? { key: 'm1', asc: false } : { key: 'points', asc: false };
+      if (S.stMode === 'cards' || S.stMode === 'corners') loadExtras(focus());
       render(true); break;
     case 'venue': S.venue = t.dataset.v; render(true); break;
     case 'line': S.line = +t.dataset.v; render(true); break;
@@ -1559,7 +1838,7 @@ document.addEventListener('click', async (e) => {
       if (S.section === 'fixtures' && S.league === null) refreshToday(); else refresh(true);
       if (playersStale()) updatePlayers();
       break;
-    case 'updplayers': updatePlayers(); break;
+    case 'updplayers': updatePlayers(S.league); break;
     case 'stripn': {
       S.stripN = STRIP_SIZES[(STRIP_SIZES.indexOf(S.stripN) + 1) % STRIP_SIZES.length];
       try { localStorage.setItem('stripN', String(S.stripN)); } catch { /* ei tallennusta */ }
@@ -1684,6 +1963,7 @@ async function init() {
     const el = document.querySelector('[data-pstatus]');
     if (el) el.textContent = S.playersStatus;
   });
+  S.espnLines = aggregateEspn(null).lines;
   loadMatches();
   refresh();
   ensureCrests();

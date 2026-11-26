@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const understat = require('./understat');
+const fotmob = require('./fotmob');
 
 // Sovelluksen nimi vaihtui (Jalkapallon Laukaustilasto -> Jalkapallotilastot): käytetään vanhaa tallennuskansiota,
 // jotta avain, arvostelut ja tuodut pelaajat säilyvät päivityksessä.
@@ -215,6 +216,21 @@ ipcMain.handle('espn:get', async (_e, req) => {
   return { status: res.status, body: res.body };
 });
 
+// American Soccer Analysis (MLS-pelaajat): vain sallitut polut ja kyselyparametrit
+const ASA_PATHS = new Set(['/teams', '/players', '/games', '/players/xgoals']);
+ipcMain.handle('asa:get', async (_e, req) => {
+  const { path: asaPath, query } = req || {};
+  if (!ASA_PATHS.has(asaPath)) return { status: 0, body: null };
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query || {})) {
+    if (!['season_name', 'split_by_games', 'general_position'].includes(k) || !/^[0-9A-Za-z]{1,12}$/.test(String(v))) return { status: 0, body: null };
+    params.set(k, String(v));
+  }
+  const qs = params.toString();
+  const res = await getJson(`https://app.americansocceranalysis.com/api/v1/mls${asaPath}${qs ? '?' + qs : ''}`);
+  return { status: res.status, body: res.body };
+});
+
 // The Odds API: haku kuuden tunnin välimuistilla (ilmainen taso ~500 krediittiä kuussa, haku = 2 krediittiä)
 function summarizeOdds(events) {
   const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
@@ -339,11 +355,64 @@ function getMatches() {
 
 ipcMain.handle('matches:get', () => getMatches());
 
+// FotMob: ottelusivut luetaan kuin selaimella; haetut ottelut säilyvät levyllä (userData/fotmob)
+const fotmobDir = () => path.join(app.getPath('userData'), 'fotmob');
+const fotmobCacheGet = (id) => readJson(path.join(fotmobDir(), `${id}.json`), null);
+const fotmobCacheSet = (id, rec) => {
+  try { fs.mkdirSync(fotmobDir(), { recursive: true }); fs.writeFileSync(path.join(fotmobDir(), `${id}.json`), JSON.stringify(rec)); } catch { /* ei välimuistia */ }
+};
+async function fotmobGet(url) {
+  let last = new Error('haku epäonnistui');
+  for (let i = 0; i < 3; i++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 40000);
+    try {
+      const res = await net.fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9', Accept: 'text/html,application/xhtml+xml,*/*' },
+        signal: ctrl.signal
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.text();
+    } catch (e) {
+      last = e;
+      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw last;
+}
+
+// Yhdistää uuden haun laukaukset/ottelurivit vanhoihin: päivitettyjen sarjojen vanhat rivit korvataan, muut säilyvät
+function mergeByLeague(old, fresh, refreshed) {
+  const merged = {};
+  for (const [id, list] of Object.entries(old)) if (!refreshed.has(id.split('-')[0])) merged[id] = list;
+  return Object.assign(merged, fresh);
+}
+
+async function fetchViaFotmob(send, scope) {
+  const r = await fotmob.fetchPlayers({ getText: fotmobGet, cacheGet: fotmobCacheGet, cacheSet: fotmobCacheSet, onProgress: send, only: scope });
+  if (!r.players.length) throw new Error(r.failed.map((f) => `${f.league}: ${f.error}`).join(', ') || 'ei pelaajia');
+  const refreshed = new Set(r.players.map((p) => p.league));
+  const shots = mergeByLeague(getShots(), r.shots, refreshed);
+  fs.writeFileSync(shotsFile(), JSON.stringify({ shots }));
+  shotsMem = shots;
+  const matches = mergeByLeague(getMatches(), r.matches, refreshed);
+  fs.writeFileSync(matchesFile(), JSON.stringify({ matches }));
+  matchesMem = matches;
+  return { ok: true, players: r.players, failed: r.failed, source: 'fotmob' };
+}
+
 let playersFetch = null;
-ipcMain.handle('players:fetch', () => {
+ipcMain.handle('players:fetch', (_e, scope) => {
   if (playersFetch) return playersFetch;
+  const only = typeof scope === 'string' && /^[A-Z0-9]{2,4}$/.test(scope) ? scope : null;
   const send = (p) => { try { if (win && !win.isDestroyed()) win.webContents.send('players:progress', p); } catch { /* ikkuna suljettu */ } };
   playersFetch = (async () => {
+    let fotmobError = '';
+    try { return await fetchViaFotmob(send, only); } catch (e) { fotmobError = e && e.message ? e.message : String(e); }
+    if (only === 'MLS') return { ok: false, error: `FotMob: ${fotmobError}` };
     const year = understat.defaultSeasonYear();
     const stored = readJson(shotsCacheFile(), {});
     const cache = { v: SHOTS_CACHE_VERSION, [year]: stored.v === SHOTS_CACHE_VERSION ? stored[year] || {} : {} }; // vain kuluva kausi säilytetään
@@ -366,7 +435,7 @@ ipcMain.handle('players:fetch', () => {
       matchesMem = mergedMatches;
       return { ok: true, players: r.players, failed: r.failed };
     } catch (e) {
-      return { ok: false, error: e && e.message ? e.message : String(e) };
+      return { ok: false, error: `FotMob: ${fotmobError}; Understat: ${e && e.message ? e.message : String(e)}` };
     }
   })().finally(() => { playersFetch = null; });
   return playersFetch;

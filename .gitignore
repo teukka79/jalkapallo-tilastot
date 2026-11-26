@@ -2,3 +2,7 @@
 xcuserdata/
 .DS_Store
 DerivedData/
+
+__pycache__/
+.venv/
+tools/_fotmob_*.json

@@ -67,7 +67,7 @@ struct RootView: View {
             .padding(.top, 8)
             Button {
                 Task {
-                    if store.section == .players { await store.updatePlayers() }
+                    if store.section == .players { await store.updatePlayers(only: store.selectedLeague) }
                     else if showsToday { await store.refreshToday() }
                     else { await store.refresh(force: true) }
                 }

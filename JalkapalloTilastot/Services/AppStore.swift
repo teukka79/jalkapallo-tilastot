@@ -63,6 +63,17 @@ final class AppStore {
     private(set) var standings: [String: [StandingRow]] = [:]
     private(set) var liveLeagues: Set<String> = []
     private(set) var updatedAt: [String: Date] = [:]
+    /// Pelattujen otteluiden kortit ja kulmat (ottelun tunnus -> tiedot).
+    private(set) var extras: [String: MatchExtras] = [:]
+    /// Kortti- ja kulmatietojen haun eteneminen (0...1); nil, kun hakua ei ole käynnissä.
+    private(set) var extrasProgress: Double? = nil
+    private var extrasLoading = false
+    private var extrasFailed: Set<String> = []
+    /// ESPN:stä haetut pelaajarivit otteluittain (ottelun tunnus -> rivit); varapalvelu Understatille ja cup-sarjat.
+    private var espnPlayerData: [String: EspnMatchPlayers] = [:]
+    /// ESPN-pelaajien ottelurivit pelaajan tunnuksella.
+    private var espnMatchLines: [String: [MatchLine]] = [:]
+    private var asaMatchLines: [String: [MatchLine]] = [:]
     private(set) var isLoading = false
     /// "Kaikki sarjat" -näkymän tämän päivän ottelut kaikista sarjoista.
     private(set) var todayMatches: [Match] = []
@@ -178,6 +189,22 @@ final class AppStore {
             rebuildCrestIndex()
         }
 
+        if let data = try? Data(contentsOf: AppStore.extrasFileURL),
+           let decoded = try? JSONDecoder().decode([String: MatchExtras].self, from: data) {
+            extras = decoded
+        }
+
+        if let data = try? Data(contentsOf: AppStore.espnPlayersFileURL),
+           let decoded = try? JSONDecoder().decode([String: EspnMatchPlayers].self, from: data) {
+            espnPlayerData = decoded
+            espnMatchLines = AppStore.aggregateEspn(espnPlayerData, leagues: nil).lines
+        }
+
+        if let data = try? Data(contentsOf: AppStore.asaMatchesFileURL),
+           let decoded = try? JSONDecoder().decode(MatchFile.self, from: data) {
+            asaMatchLines = decoded.matches
+        }
+
         loadSampleSchedules()
     }
 
@@ -291,6 +318,69 @@ final class AppStore {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    // MARK: Kortit ja kulmat
+
+    /// Hakee puuttuvien pelattujen otteluiden kortit ja kulmat ESPN:stä. Valmiit tallennetaan levylle,
+    /// joten jatkossa haetaan vain uudet ottelut.
+    func loadExtras(for league: League) async {
+        guard !extrasLoading else { return }
+        let finished = (matches[league.rawValue] ?? []).filter {
+            $0.status == .finished && extras[$0.id] == nil && !extrasFailed.contains($0.id)
+        }
+        guard !finished.isEmpty else { return }
+        extrasLoading = true
+        extrasProgress = 0
+        defer { extrasLoading = false; extrasProgress = nil }
+        let service = EspnService()
+
+        // ESPN-sarjoissa tunnus on valmiina; football-data.org-sarjoissa se etsitään ESPN:n otteluohjelmasta.
+        var targets: [(match: Match, event: String)] = []
+        if league.source == .espn {
+            targets = finished.map { ($0, String($0.id.split(separator: "-").last ?? "")) }
+        } else if let espn = try? await service.matches(for: league) {
+            func same(_ name: String, _ other: String) -> Bool {
+                let a = TeamNames.key(name), b = TeamNames.key(other)
+                return a == b || TeamNames.related(a, b)
+            }
+            for match in finished {
+                if let found = espn.matches.first(where: {
+                    same($0.home, match.home) && same($0.away, match.away)
+                        && abs($0.date.timeIntervalSince(match.date)) < 36 * 3600
+                }) {
+                    targets.append((match, String(found.id.split(separator: "-").last ?? "")))
+                } else {
+                    extrasFailed.insert(match.id)
+                }
+            }
+        } else {
+            return
+        }
+
+        let total = Double(max(targets.count, 1))
+        var done = 0
+        let chunk = 6
+        for start in stride(from: 0, to: targets.count, by: chunk) {
+            let slice = Array(targets[start..<min(start + chunk, targets.count)])
+            await withTaskGroup(of: (String, MatchExtras?).self) { group in
+                for target in slice {
+                    group.addTask { (target.match.id, try? await service.extras(eventID: target.event, league: league)) }
+                }
+                for await (id, value) in group {
+                    if let value { extras[id] = value } else { extrasFailed.insert(id) }
+                    done += 1
+                }
+            }
+            extrasProgress = Double(done) / total
+            saveExtras()
+            if Task.isCancelled { break }
+        }
+    }
+
+    private func saveExtras() {
+        guard let data = try? JSONEncoder().encode(extras) else { return }
+        try? data.write(to: AppStore.extrasFileURL, options: .atomic)
     }
 
     // MARK: Kertoimet (The Odds API)
@@ -491,43 +581,78 @@ final class AppStore {
 
     /// Päivittää pelaajat ajamalla tools/fetch_players.py:n (Understat), tuo tuloksen ja täydentää kansallisuudet.
     /// Ensimmäinen ajo kestää useita minuutteja.
-    func updatePlayers() async {
+    /// only: päivittää vain tämän sarjan (nil = kaikki).
+    func updatePlayers(only scope: League? = nil) async {
         guard !isUpdatingPlayers else { return }
         errorMessage = nil
+        playerUpdateStatus = "Käynnistetään…"
         let folder = (toolsFolder as NSString).expandingTildeInPath
         let python = folder + "/.venv/bin/python"
         let script = folder + "/tools/fetch_players.py"
-        guard FileManager.default.isExecutableFile(atPath: python),
-              FileManager.default.fileExists(atPath: script) else {
-            errorMessage = "Pelaajapäivitystä ei voi ajaa, koska projektikansiosta puuttuu .venv tai tools/fetch_players.py. Valitse oikea kansio asetuksista (rattaan kuvake)."
-            return
-        }
+        var understatError: String?
+        var understatOK = false
+        let understatTried = scope == nil || scope?.hasPlayerStats == true || scope == .mls
 
-        playerUpdateStatus = "Käynnistetään…"
-        playerUpdateProgress = nil
-        let temp = FileManager.default.temporaryDirectory
-        let output = temp.appendingPathComponent("players-update.json")
-        let shotsOutput = temp.appendingPathComponent("shots-update.json")
-        let matchesOutput = temp.appendingPathComponent("matches-update.json")
-        try? FileManager.default.removeItem(at: output)
-        try? FileManager.default.removeItem(at: shotsOutput)
-        try? FileManager.default.removeItem(at: matchesOutput)
+        if !understatTried {
+            // Cup-sarjat ja MLS eivät kulje Python-skriptin kautta
+        } else if FileManager.default.isExecutableFile(atPath: python), FileManager.default.fileExists(atPath: script) {
+            playerUpdateStatus = "Käynnistetään…"
+            playerUpdateProgress = nil
+            let temp = FileManager.default.temporaryDirectory
+            let output = temp.appendingPathComponent("players-update.json")
+            let shotsOutput = temp.appendingPathComponent("shots-update.json")
+            let matchesOutput = temp.appendingPathComponent("matches-update.json")
+            try? FileManager.default.removeItem(at: output)
+            try? FileManager.default.removeItem(at: shotsOutput)
+            try? FileManager.default.removeItem(at: matchesOutput)
 
-        let result = await runUpdate(python: python, script: script, folder: folder,
-                                     output: output, shotsOutput: shotsOutput, matchesOutput: matchesOutput)
-        if result.status == 0 {
-            do {
-                try importPlayers(data: try Data(contentsOf: output))
-                lastPlayersUpdate = Date()
-                UserDefaults.standard.set(lastPlayersUpdate, forKey: Keys.playersUpdated)
-                installShots(from: shotsOutput)
-                installMatches(from: matchesOutput)
-                await enrichNationalities()
-            } catch {
-                errorMessage = "Päivityksen tulosta ei voitu lukea"
+            let result = await runUpdate(python: python, script: script, folder: folder,
+                                         output: output, shotsOutput: shotsOutput, matchesOutput: matchesOutput,
+                                         leagueCode: scope?.rawValue)
+            if result.status == 0 {
+                do {
+                    if let scope {
+                        try mergePlayers(data: try Data(contentsOf: output), league: scope)
+                        mergeDictFile(key: "shots", from: shotsOutput, into: AppStore.shotsFileURL, idPrefix: "\(scope.rawValue)-")
+                        mergeDictFile(key: "matches", from: matchesOutput, into: AppStore.matchesFileURL, idPrefix: "\(scope.rawValue)-")
+                        shotFile = nil
+                        shotFileLoaded = false
+                        await loadMatchLines()
+                    } else {
+                        try importPlayers(data: try Data(contentsOf: output))
+                        installShots(from: shotsOutput)
+                        installMatches(from: matchesOutput)
+                    }
+                    lastPlayersUpdate = Date()
+                    UserDefaults.standard.set(lastPlayersUpdate, forKey: Keys.playersUpdated)
+                    await enrichNationalities()
+                    understatOK = true
+                } catch {
+                    understatError = "Päivityksen tulosta ei voitu lukea"
+                }
+            } else {
+                understatError = result.lastLine
             }
         } else {
-            errorMessage = "Päivitys epäonnistui: \(result.lastLine)"
+            understatError = "projektikansiosta puuttuu .venv tai tools/fetch_players.py"
+        }
+
+        // MLS haetaan American Soccer Analysisista (xG mukana); jos se ei vastaa, ESPN:stä.
+        playerUpdateProgress = nil
+        // Jos skripti (FotMob) toi MLS:n pelaajat laukaustietoineen, ASA:ta ei tarvita
+        let mlsFromScript = understatOK && players.contains { $0.league == League.mls.rawValue }
+        let asaTried = (scope == nil || scope?.hasAsaPlayerStats == true) && !mlsFromScript
+        let asaOK = asaTried ? await updateAsaPlayers() : true
+
+        // Cup-sarjat haetaan aina ESPN:stä. Jos Understat ei vastannut, myös viisi suurta sarjaa haetaan sieltä.
+        let leagues = (scope.map { [$0] } ?? League.allCases).filter {
+            $0.hasEspnPlayerStats || (understatTried && !understatOK && $0.hasPlayerStats) || (!asaOK && $0.hasAsaPlayerStats)
+        }
+        let espnOK = leagues.isEmpty ? true : await updateEspnPlayers(leagues: leagues)
+        if understatTried && !understatOK {
+            errorMessage = espnOK
+                ? "Laukaustilastojen lähteet (Understat, FotMob, WhoScored) eivät vastanneet (\(understatError ?? "tuntematon virhe")). Pelaajat haettiin ESPN:stä: xG ja rangaistusalueen ulkopuoliset laukaukset puuttuvat."
+                : "Päivitys epäonnistui: \(understatError ?? "tuntematon virhe")"
         }
         playerUpdateStatus = nil
         playerUpdateProgress = nil
@@ -538,6 +663,36 @@ final class AppStore {
         guard autoUpdatePlayers, !isUpdatingPlayers, let last = lastPlayersUpdate,
               Date().timeIntervalSince(last) > 24 * 3600 else { return }
         await updatePlayers()
+    }
+
+    /// Korvaa yhden sarjan pelaajat skriptin tuloksella ja säilyttää muut sarjat.
+    private func mergePlayers(data: Data, league: League) throws {
+        let decoded = try JSONDecoder().decode([Player].self, from: data).filter { $0.league == league.rawValue }
+        guard !decoded.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+        if playersAreSample { players = [] }
+        players.removeAll { $0.league == league.rawValue }
+        players.append(contentsOf: decoded)
+        playersAreSample = false
+        if let out = try? JSONEncoder().encode(players) {
+            try? out.write(to: AppStore.playersFileURL, options: .atomic)
+        }
+    }
+
+    /// Yhdistää {avain: {id: …}} -muotoisen tiedoston tulokset olemassa olevaan: sarjan (id-etuliite) vanhat rivit korvataan.
+    private func mergeDictFile(key: String, from newURL: URL, into dest: URL, idPrefix: String) {
+        guard let newData = try? Data(contentsOf: newURL),
+              let newObject = (try? JSONSerialization.jsonObject(with: newData)) as? [String: Any],
+              let fresh = newObject[key] as? [String: Any] else { return }
+        var merged: [String: Any] = [:]
+        if let oldData = try? Data(contentsOf: dest),
+           let oldObject = (try? JSONSerialization.jsonObject(with: oldData)) as? [String: Any],
+           let old = oldObject[key] as? [String: Any] {
+            merged = old.filter { !$0.key.hasPrefix(idPrefix) }
+        }
+        merged.merge(fresh) { _, new in new }
+        if let out = try? JSONSerialization.data(withJSONObject: [key: merged]) {
+            try? out.write(to: dest, options: .atomic)
+        }
     }
 
     private func installShots(from url: URL) {
@@ -562,7 +717,8 @@ final class AppStore {
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? JSONDecoder().decode(MatchFile.self, from: data)
         }.value
-        matchLines = file?.matches ?? [:]
+        matchLines = (file?.matches ?? [:]).merging(espnMatchLines) { current, _ in current }
+            .merging(asaMatchLines) { current, _ in current }
     }
 
     private final class OutputBuffer: @unchecked Sendable {
@@ -595,12 +751,14 @@ final class AppStore {
     }
 
     private func runUpdate(python: String, script: String, folder: String,
-                           output: URL, shotsOutput: URL, matchesOutput: URL) async -> (status: Int32, lastLine: String) {
+                           output: URL, shotsOutput: URL, matchesOutput: URL,
+                           leagueCode: String? = nil) async -> (status: Int32, lastLine: String) {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: python)
             process.arguments = [script, "--out", output.path, "--shots-out", shotsOutput.path,
                                  "--matches-out", matchesOutput.path]
+            if let leagueCode { process.arguments? += ["--leagues", leagueCode] }
             process.currentDirectoryURL = URL(fileURLWithPath: folder)
             var environment = ProcessInfo.processInfo.environment
             environment["PYTHONUNBUFFERED"] = "1"
@@ -636,6 +794,141 @@ final class AppStore {
                 continuation.resume(returning: (-1, error.localizedDescription))
             }
         }
+    }
+
+    // MARK: MLS-pelaajat American Soccer Analysisista
+
+    /// Hakee MLS:n pelaajat ja ottelurivit ASA:sta ja korvaa niillä sarjan aiemmat pelaajat. Palauttaa true, jos haku onnistui.
+    @discardableResult
+    func updateAsaPlayers() async -> Bool {
+        playerUpdateStatus = "ASA: MLS…"
+        let season = League.mls.season(on: Date())
+        guard let result = try? await AsaService().mlsPlayers(season: season) else { return false }
+        players.removeAll { $0.league == League.mls.rawValue }
+        players.append(contentsOf: result.players)
+        playersAreSample = false
+        if let data = try? JSONEncoder().encode(players) {
+            try? data.write(to: AppStore.playersFileURL, options: .atomic)
+        }
+        asaMatchLines = result.lines
+        let encoded: [String: [[Any]]] = result.lines.mapValues { lines in
+            lines.map { [$0.date, $0.opponent, $0.goals, $0.shots, $0.onTarget, $0.outside, $0.outsideOnTarget, $0.minutes] as [Any] }
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: ["matches": encoded]) {
+            try? data.write(to: AppStore.asaMatchesFileURL, options: .atomic)
+        }
+        matchLines = matchLines.filter { !$0.key.hasPrefix("MLS-") }.merging(asaMatchLines) { current, _ in current }
+        lastPlayersUpdate = Date()
+        UserDefaults.standard.set(lastPlayersUpdate, forKey: Keys.playersUpdated)
+        return true
+    }
+
+    // MARK: Pelaajat ESPN:stä (cup-sarjat ja varapalvelu)
+
+    /// Hakee puuttuvien pelattujen otteluiden pelaajarivit ESPN:stä ja yhdistää ne pelaajalistaan.
+    /// Palauttaa true, jos sarjoille saatiin pelaajia.
+    @discardableResult
+    func updateEspnPlayers(leagues: [League]) async -> Bool {
+        let service = EspnService()
+        var gotAny = false
+        for league in leagues {
+            playerUpdateStatus = "ESPN: \(league.name)…"
+            guard let list = try? await service.matches(for: league) else { continue }
+            let finished = list.matches.filter { $0.status == .finished }
+            let missing = finished.filter { espnPlayerData[$0.id] == nil }
+            var done = 0
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd"
+            formatter.timeZone = TimeZone(identifier: "UTC")
+            for start in stride(from: 0, to: missing.count, by: 6) {
+                let slice = Array(missing[start..<min(start + 6, missing.count)])
+                await withTaskGroup(of: (Match, [EspnPlayerLine]?).self) { group in
+                    for match in slice {
+                        let event = String(match.id.split(separator: "-").last ?? "")
+                        group.addTask { (match, try? await service.playerLines(eventID: event, league: league)) }
+                    }
+                    for await (match, lines) in group {
+                        if let lines {
+                            espnPlayerData[match.id] = EspnMatchPlayers(league: league.rawValue,
+                                                                        date: formatter.string(from: match.date),
+                                                                        home: match.home, away: match.away, lines: lines)
+                        }
+                        done += 1
+                    }
+                }
+                playerUpdateStatus = "ESPN: \(league.name) \(done)/\(missing.count)"
+                playerUpdateProgress = Double(done) / Double(max(missing.count, 1))
+                if let data = try? JSONEncoder().encode(espnPlayerData) {
+                    try? data.write(to: AppStore.espnPlayersFileURL, options: .atomic)
+                }
+            }
+            if espnPlayerData.values.contains(where: { $0.league == league.rawValue }) { gotAny = true }
+        }
+        guard gotAny else { return false }
+
+        let result = AppStore.aggregateEspn(espnPlayerData, leagues: Set(leagues.map(\.rawValue)))
+        guard !result.players.isEmpty else { return false }
+        let replaced = Set(leagues.map(\.rawValue))
+        players.removeAll { replaced.contains($0.league) }
+        players.append(contentsOf: result.players)
+        playersAreSample = false
+        if let data = try? JSONEncoder().encode(players) {
+            try? data.write(to: AppStore.playersFileURL, options: .atomic)
+        }
+        espnMatchLines = AppStore.aggregateEspn(espnPlayerData, leagues: nil).lines
+        // Understatin ottelurivit ovat ensisijaisia, ESPN:n täydentävät niitä
+        matchLines = matchLines.filter { !$0.key.hasPrefix("espn-") }.merging(espnMatchLines) { current, _ in current }
+        lastPlayersUpdate = Date()
+        UserDefaults.standard.set(lastPlayersUpdate, forKey: Keys.playersUpdated)
+        return true
+    }
+
+    /// Laskee pelaajien kausitilastot ja ottelurivit ESPN-pelaajariveistä. leagues = nil: kaikki sarjat.
+    private nonisolated static func aggregateEspn(_ data: [String: EspnMatchPlayers],
+                                                  leagues: Set<String>?) -> (players: [Player], lines: [String: [MatchLine]]) {
+        struct Acc {
+            var name: String, team: String, league: String
+            var positions: [String: Int] = [:]
+            var appearances = 0, goals = 0, shots = 0, onTarget = 0
+            var lines: [(date: String, line: MatchLine)] = []
+        }
+        func position(_ code: String) -> Position? {
+            let c = code.uppercased()
+            if c.isEmpty || c == "SUB" || c == "S" { return nil }
+            if c.hasPrefix("G") { return .goalkeeper }
+            if c.hasPrefix("CD") || c.hasPrefix("D") || c == "LB" || c == "RB" || c == "WB" || c == "SW" || c == "LWB" || c == "RWB" { return .defender }
+            if c.hasPrefix("CF") || c.hasPrefix("F") || c.hasPrefix("ST") || c.hasPrefix("LF") || c.hasPrefix("RF") || c == "SS" || c == "LW" || c == "RW" { return .forward }
+            if c.hasPrefix("M") || c.hasPrefix("CM") || c.hasPrefix("AM") || c.hasPrefix("DM") || c.hasPrefix("LM") || c.hasPrefix("RM") { return .midfielder }
+            return nil
+        }
+        var byPlayer: [String: Acc] = [:]
+        for match in data.values {
+            if let leagues, !leagues.contains(match.league) { continue }
+            for line in match.lines {
+                let key = "espn-\(match.league)-\(TeamNames.key(line.team))-\(TeamNames.key(line.name))"
+                var acc = byPlayer[key] ?? Acc(name: line.name, team: line.team, league: match.league)
+                acc.appearances += 1
+                acc.goals += line.goals
+                acc.shots += line.shots
+                acc.onTarget += line.onTarget
+                if let p = position(line.position) { acc.positions[p.rawValue, default: 0] += 1 }
+                let opponent = TeamNames.key(line.team) == TeamNames.key(match.home) ? match.away : match.home
+                acc.lines.append((match.date, MatchLine(date: match.date, opponent: opponent, goals: line.goals,
+                                                        shots: line.shots, onTarget: line.onTarget)))
+                byPlayer[key] = acc
+            }
+        }
+        var players: [Player] = []
+        var lines: [String: [MatchLine]] = [:]
+        for (id, acc) in byPlayer {
+            let pos = acc.positions.max { $0.value < $1.value }.flatMap { Position(rawValue: $0.key) } ?? .midfielder
+            players.append(Player(id: id, name: acc.name, team: acc.team, league: acc.league, nationality: "",
+                                  position: pos, appearances: acc.appearances, goals: acc.goals, shots: acc.shots,
+                                  shotsOnTarget: acc.onTarget, shotsOutsideBox: 0, shotsOnTargetOutsideBox: 0))
+            lines[id] = acc.lines.sorted { $0.date < $1.date }.map(\.line)
+        }
+        return (players, lines)
     }
 
     // MARK: Kansallisuudet
@@ -842,10 +1135,28 @@ final class AppStore {
         return dir.appendingPathComponent("crests.json")
     }
 
+    private static var espnPlayersFileURL: URL {
+        let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("espn-players.json")
+    }
+
+    private static var extrasFileURL: URL {
+        let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("extras.json")
+    }
+
     private static var matchesFileURL: URL {
         let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                 appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
         return dir.appendingPathComponent("matches.json")
+    }
+
+    private static var asaMatchesFileURL: URL {
+        let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: true)) ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("asa-matches.json")
     }
 
     private static var statsFileURL: URL {

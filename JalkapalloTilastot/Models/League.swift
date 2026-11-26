@@ -136,6 +136,17 @@ enum League: String, CaseIterable, Identifiable, Codable, Hashable {
         }
     }
 
+    /// Sarjat, joiden pelaajatilastot haetaan aina ESPN:stä (ei xG:tä eikä laukausten sijaintia).
+    var hasEspnPlayerStats: Bool {
+        switch self {
+        case .championsLeague, .europaLeague, .conferenceLeague: return true
+        default: return false
+        }
+    }
+
+    /// MLS:n pelaajatilastot haetaan American Soccer Analysisista (xG mukana, ei laukausten sijaintia).
+    var hasAsaPlayerStats: Bool { self == .mls }
+
     var zoneStyle: ZoneStyle {
         switch self {
         case .championsLeague, .europaLeague, .conferenceLeague: return .europeanCup

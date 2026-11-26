@@ -1,13 +1,14 @@
 import SwiftUI
 
 private enum StandingsMode: Hashable {
-    case table, overUnder, halfFull, btts
+    case table, overUnder, halfFull, btts, cards, corners
 }
 
 /// Lajitteluperuste kaikissa kolmessa näkymässä.
 private enum SortKey: Hashable {
     case position, team, played, won, drawn, lost, goalsFor, goalDifference, points
     case form, over, under, average, recentOver, firstHalf
+    case m1, m2, m3, m4, m5
     case combo(String)
 }
 
@@ -48,6 +49,8 @@ struct StandingsView: View {
                 case .overUnder: overUnderContent(games)
                 case .halfFull: halfFullContent(games)
                 case .btts: bttsContent(games)
+                case .cards: extrasContent(games, kind: .cards)
+                case .corners: extrasContent(games, kind: .corners)
                 }
             }
             .panel()
@@ -55,6 +58,9 @@ struct StandingsView: View {
             if mode == .table { legend }
         }
         .sheet(item: $selected) { TeamDetailView(team: $0.name, league: league) }
+        .task(id: "\(league.rawValue)-\(mode == .cards || mode == .corners)-\(matches.count)") {
+            if mode == .cards || mode == .corners { await store.loadExtras(for: league) }
+        }
         .onChange(of: mode) { _, newMode in
             // Jokaisella näkymällä on oma oletusjärjestys
             switch newMode {
@@ -62,6 +68,7 @@ struct StandingsView: View {
             case .overUnder: sort = .over; ascending = false
             case .halfFull: sort = .points; ascending = false
             case .btts: sort = .over; ascending = false
+            case .cards, .corners: sort = .m1; ascending = false
             }
         }
     }
@@ -86,7 +93,9 @@ struct StandingsView: View {
             ThemedToggle(options: [(value: StandingsMode.table, label: "Taulukko"),
                                    (value: StandingsMode.overUnder, label: "Yli/Alle"),
                                    (value: StandingsMode.halfFull, label: "HT/FT"),
-                                   (value: StandingsMode.btts, label: "BTTS")],
+                                   (value: StandingsMode.btts, label: "BTTS"),
+                                   (value: StandingsMode.cards, label: "Kortit"),
+                                   (value: StandingsMode.corners, label: "Kulmat")],
                          selection: $mode)
             ThemedToggle(options: Venue.allCases.map { (value: $0, label: $0.title) }, selection: $venue)
             if mode == .overUnder {
@@ -493,6 +502,149 @@ struct StandingsView: View {
         }
     }
 
+    // MARK: Kortit ja kulmat
+
+    private enum ExtraKind { case cards, corners }
+
+    private struct ExtraRow: Identifiable {
+        struct Item: Identifiable {
+            let game: TeamGame
+            let yellow: Int, red: Int, cornersFor: Int, cornersAgainst: Int
+            var id: String { game.id }
+        }
+        let team: String
+        let items: [Item]   // vanhimmasta uusimpaan, vain ottelut joilla on tiedot
+        var id: String { team }
+        var played: Int { items.count }
+        func sum(_ f: (Item) -> Int) -> Int { items.reduce(0) { $0 + f($1) } }
+        func avg(_ f: (Item) -> Int) -> Double { items.isEmpty ? 0 : Double(sum(f)) / Double(items.count) }
+    }
+
+    private func extraItems(_ games: [TeamGame]) -> [ExtraRow.Item] {
+        games.compactMap { game in
+            guard let e = store.extras[game.match.id] else { return nil }
+            return game.isHome
+                ? ExtraRow.Item(game: game, yellow: e.homeYellow, red: e.homeRed, cornersFor: e.homeCorners, cornersAgainst: e.awayCorners)
+                : ExtraRow.Item(game: game, yellow: e.awayYellow, red: e.awayRed, cornersFor: e.awayCorners, cornersAgainst: e.homeCorners)
+        }
+    }
+
+    private func extraMetric(_ row: ExtraRow, _ kind: ExtraKind, _ key: SortKey) -> Double {
+        switch (kind, key) {
+        case (_, .played): return Double(row.played)
+        case (.cards, .m1): return Double(row.sum { $0.yellow })
+        case (.cards, .m2): return Double(row.sum { $0.red })
+        case (.cards, .m3): return row.avg { $0.yellow }
+        case (.cards, .m4): return row.avg { $0.yellow + $0.red }
+        case (.cards, .recentOver): return Double(row.items.suffix(5).reduce(0) { $0 + $1.yellow + $1.red })
+        case (.corners, .m1): return Double(row.sum { $0.cornersFor })
+        case (.corners, .m2): return Double(row.sum { $0.cornersAgainst })
+        case (.corners, .m3): return row.avg { $0.cornersFor }
+        case (.corners, .m4): return row.avg { $0.cornersAgainst }
+        case (.corners, .m5): return row.avg { $0.cornersFor + $0.cornersAgainst }
+        case (.corners, .recentOver): return Double(row.items.suffix(5).reduce(0) { $0 + $1.cornersFor + $1.cornersAgainst })
+        default: return 0
+        }
+    }
+
+    private func sortedExtras(_ list: [ExtraRow], _ kind: ExtraKind) -> [ExtraRow] {
+        list.sorted { l, r in
+            if sort == .team { return ascending ? l.team < r.team : l.team > r.team }
+            if let result = ordered(extraMetric(l, kind, sort), extraMetric(r, kind, sort)) { return result }
+            let a = extraMetric(l, kind, .m1), b = extraMetric(r, kind, .m1)
+            if a != b { return a > b }
+            return l.team < r.team
+        }
+    }
+
+    @ViewBuilder
+    private func extrasContent(_ games: TeamGames, kind: ExtraKind) -> some View {
+        let names = rows.isEmpty ? games.teamNames : rows.map(\.team)
+        let list = sortedExtras(names.map { ExtraRow(team: $0, items: extraItems(games.games(for: $0))) }, kind)
+        let cols: [Column] = kind == .cards ? [
+            Column(title: "OTT", width: 44, key: .played, help: "Ottelut, joista kortit ovat tiedossa"),
+            Column(title: "Keltaiset", width: 74, key: .m1, help: "Joukkueen saamat keltaiset kortit yhteensä"),
+            Column(title: "Punaiset", width: 70, key: .m2, help: "Joukkueen saamat punaiset kortit yhteensä"),
+            Column(title: "Kelt./ott", width: 70, key: .m3, help: "Keltaisia kortteja keskimäärin per ottelu"),
+            Column(title: "Kortit/ott", width: 76, key: .m4, help: "Keltaiset ja punaiset yhteensä keskimäärin per ottelu")
+        ] : [
+            Column(title: "OTT", width: 44, key: .played, help: "Ottelut, joista kulmat ovat tiedossa"),
+            Column(title: "Tehdyt", width: 60, key: .m1, help: "Joukkueen saamat kulmapotkut yhteensä"),
+            Column(title: "Päästetyt", width: 70, key: .m2, help: "Vastustajien saamat kulmapotkut yhteensä"),
+            Column(title: "Teh./ott", width: 66, key: .m3, help: "Joukkueen kulmia keskimäärin per ottelu"),
+            Column(title: "Pääst./ott", width: 72, key: .m4, help: "Vastustajien kulmia keskimäärin per ottelu"),
+            Column(title: "Yht./ott", width: 66, key: .m5, help: "Kulmia yhteensä (molemmat joukkueet) keskimäärin per ottelu")
+        ]
+        let stripHelp = kind == .cards
+            ? "Viiden viimeisimmän ottelun kortit (keltaiset + punaiset), uusin vasemmalla. ? = seuraava ottelu"
+            : "Viiden viimeisimmän ottelun kulmat yhteensä, uusin vasemmalla. ? = seuraava ottelu"
+        headerBar([
+            Column(title: "#", width: 40, key: nil, help: "Sija nykyisessä järjestyksessä"),
+            Column(title: "Joukkue", width: nil, key: .team, help: "Joukkueen nimi", alignment: .leading)
+        ] + cols + [
+            Column(title: "Viimeiset 5", width: 200, key: .recentOver, help: stripHelp, alignment: .leading)
+        ])
+        Divider().overlay(Theme.stroke)
+        if let progress = store.extrasProgress {
+            HStack(spacing: 10) {
+                ProgressView(value: progress).tint(Theme.floodlight).frame(width: 160)
+                Text("Haetaan kortti- ja kulmatietoja… \(Int(progress * 100)) %")
+                    .font(Theme.label(12)).foregroundStyle(Theme.chalkMuted)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            Divider().overlay(Theme.stroke)
+        }
+        if list.allSatisfy({ $0.played == 0 }) {
+            emptyMessage(store.extrasProgress == nil
+                         ? "Kortti- ja kulmatietoja ei ole saatavilla tälle sarjalle"
+                         : "Haetaan tietoja ottelu kerrallaan…")
+        } else {
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(list.enumerated()), id: \.element.id) { index, row in
+                        HStack(spacing: 0) {
+                            Text("\(index + 1)").font(Theme.number(14, weight: .semibold)).foregroundStyle(Theme.chalk).frame(width: 40)
+                            teamCell(row.team)
+                            cell("\(row.played)", 44)
+                            if kind == .cards {
+                                cell("\(row.sum { $0.yellow })", 74)
+                                cell("\(row.sum { $0.red })", 70)
+                                Text(Format.one(row.avg { $0.yellow })).font(Theme.number(14, weight: .semibold))
+                                    .foregroundStyle(Theme.floodlight).frame(width: 70)
+                                cell(Format.one(row.avg { $0.yellow + $0.red }), 76)
+                            } else {
+                                cell("\(row.sum { $0.cornersFor })", 60)
+                                cell("\(row.sum { $0.cornersAgainst })", 70)
+                                Text(Format.one(row.avg { $0.cornersFor })).font(Theme.number(14, weight: .semibold))
+                                    .foregroundStyle(Theme.floodlight).frame(width: 66)
+                                cell(Format.one(row.avg { $0.cornersAgainst }), 72)
+                                cell(Format.one(row.avg { $0.cornersFor + $0.cornersAgainst }), 66)
+                            }
+                            HStack(spacing: 4) {
+                                nextBadge(games.next(for: row.team))
+                                ForEach(Array(row.items.suffix(5).reversed())) { item in
+                                    let value = kind == .cards ? item.yellow + item.red : item.cornersFor + item.cornersAgainst
+                                    let detail = kind == .cards
+                                        ? "keltaiset \(item.yellow), punaiset \(item.red)"
+                                        : "kulmat \(item.cornersFor)–\(item.cornersAgainst)"
+                                    CountBadge(value: value, help: "\(resultText(item.game)) · \(detail)")
+                                        .onHover { setHighlight(item.game.match, $0) }
+                                }
+                            }
+                            .frame(width: 200, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 46)
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1) }
+                        .background { Rectangle().fill(highlightFill(row.team)) }
+                        .openable { selected = TeamSelection(name: row.team) }
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: HT/FT
 
     private static let htftColumns = [("V/V", "WW"), ("V/T", "WD"), ("V/H", "WL"),
@@ -733,6 +885,24 @@ private extension View {
 }
 
 /// Pieni värillinen merkki: V/T/H, +/− tai ? (seuraava ottelu).
+/// Pieni numeromerkki viimeisten otteluiden kortti- ja kulmamäärille.
+struct CountBadge: View {
+    let value: Int
+    let help: String
+
+    var body: some View {
+        Text("\(value)")
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .foregroundStyle(Theme.chalk)
+            .frame(width: 26, height: 24)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.panelRaised))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
+            .help(help)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(help)
+    }
+}
+
 struct ResultBadge: View {
     enum Kind { case win, draw, loss, over, under, yes, no, unknown }
 

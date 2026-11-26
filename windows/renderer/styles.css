@@ -210,6 +210,9 @@ select.field { color-scheme: dark; }
 .rb.win, .rb.over { background: var(--pos); }
 .rb.draw { background: var(--amber); }
 .rb.loss, .rb.under { background: var(--neg); }
+.rb.count { background: var(--raised); color: var(--chalk); border: 1px solid var(--stroke); }
+.xprog { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--stroke); color: var(--muted); font-size: 12px; }
+.xprog progress { width: 160px; accent-color: var(--amber); }
 .rb.unknown { background: var(--raised); color: var(--muted); border: 1px solid var(--stroke); }
 .hc { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 24px; border-radius: 5px; font-weight: 500; font-size: 14px; }
 .hc.zero { color: var(--muted); }
