@@ -803,7 +803,7 @@ function playerModalView() {
   let body;
   if (pm.state === 'loading') body = '<div class="empty"><b>Haetaan laukauksia…</b></div>';
   else if (!pm.available) body = `<div class="empty"><b>Laukauskartan tiedot puuttuvat</b>
-    <span>Laukaukset haetaan Understatista pelaajadatan päivityksen yhteydessä (ensimmäinen haku kestää hetken).</span>
+    <span>Laukaukset haetaan FotMobista pelaajadatan päivityksen yhteydessä (ensimmäinen haku kestää hetken).</span>
     <button class="ghost" data-act="updplayers" ${S.updatingPlayers ? 'disabled' : ''}>${S.updatingPlayers ? 'Haetaan…' : '⟳ Päivitä pelaajadata'}</button>
     ${S.updatingPlayers ? `<span data-pstatus>${esc(S.playersStatus)}</span>` : ''}</div>`;
   else if (!all.length) body = '<div class="empty"><b>Ei laukauksia tällä kaudella</b></div>';
@@ -817,7 +817,7 @@ function playerModalView() {
       <div class="pm-filters">${resChip('all', 'Kaikki', 'var(--amber)', all.length)}${Object.entries(SHOT_RES).map(([k, [label, color]]) => { const n = all.filter((sh) => sh[4] === k).length; return n ? resChip(k, label, color, n) : ''; }).join('')}</div>
       ${sits.length > 1 ? `<div class="pm-filters">${['all', ...sits].map((k) => `<button class="chip ${pm.sit === k ? 'sel' : ''}" data-act="pmsit" data-v="${k}" style="--c:var(--eu)">${k === 'all' ? 'Kaikki tilanteet' : SHOT_SIT[k]}</button>`).join('')}</div>` : ''}
       <div class="pm-map">${shotMapSvg(vis)}</div>
-      <div class="hint" style="text-align:center">Ympyrän koko = laukauksen xG. Näytetään ${vis.length} / ${all.length} laukausta. Kenttä: hyökkäyspuolisko, maali ylhäällä. Tiedot: Understat.</div>`;
+      <div class="hint" style="text-align:center">Ympyrän koko = laukauksen xG. Näytetään ${vis.length} / ${all.length} laukausta. Kenttä: hyökkäyspuolisko, maali ylhäällä. Tiedot: FotMob (aiemmin haetut: Understat).</div>`;
   }
   return `<div class="modal-bg top" data-act="close-bg"><div class="modal player" role="dialog" aria-label="${esc(p.name)}">
     <div class="pm-head">${badge(p.team, 48, p.league)}<div style="min-width:0;flex:1"><h2>${esc(p.name)}</h2>
@@ -1172,7 +1172,7 @@ function previewModalView(m) {
     return [per(shots), per(sot), xg == null ? '–' : per(xg), xg == null ? '–' : (goals - xg >= 0 ? '+' : '') + fmt1(goals - xg)];
   };
   const sv = strVals(h), sa = strVals(a);
-  const strength = h.players.length || a.players.length ? sec('Tilastoerot', 'pelaajien yhteenlasketut luvut, Understat', cmpHead
+  const strength = h.players.length || a.players.length ? sec('Tilastoerot', 'pelaajien yhteenlasketut luvut', cmpHead
     + cmp('Laukauksia / ottelu', sv[0], sa[0]) + cmp('Maalia kohti / ottelu', sv[1], sa[1])
     + cmp('xG / ottelu', sv[2], sa[2]) + cmp('Maalit miinus xG', sv[3], sa[3])) : '';
 
@@ -1355,7 +1355,7 @@ const stripDate = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
 
 function stripCell(p, key) {
   const list = S.pmatches[p.id];
-  if (!list || !list.length) return '<span class="sc-none" title="Ottelukohtaiset tiedot haetaan, kun pelaajadata päivitetään Understatista">–</span>';
+  if (!list || !list.length) return '<span class="sc-none" title="Ottelukohtaiset tiedot haetaan, kun pelaajadata päivitetään">–</span>';
   const m = STRIP[key];
   return `<span class="strip-m ${S.stripN > 5 ? 'dense' : ''}">${list.slice(-S.stripN).reverse().map((r) => {
     const v = r[m.idx];
@@ -1758,9 +1758,9 @@ function settingsView() {
       <div class="hint">Valinnainen. Ilmainen avain osoitteessa <a href="#" class="ext" data-act="link" data-v="https://the-odds-api.com/">the-odds-api.com</a> (noin 500 krediittiä kuussa). Yksi sarjan haku maksaa 2 krediittiä; kertoimet tallennetaan 6 tunniksi.${S.oddsRemaining != null ? ` Krediittejä jäljellä: ${S.oddsRemaining}.` : ''}${S.oddsError ? `<br>${esc(S.oddsError)}` : ''}</div></div>
     <hr>
     <div><h3>Pelaajatilastot</h3>
-      <div class="sub">${S.playersSource === 'understat' ? `Haettu Understatista · ${S.players.length} pelaajaa${S.playersUpdated ? ' · ' + new Date(S.playersUpdated).toLocaleString('fi-FI', { dateStyle: 'short', timeStyle: 'short' }) : ''}${S.playersPartial ? ' · osittain' : ''}` : S.playersSource === 'bundled' ? `Mukana tuleva Understat-data · ${S.players.length} pelaajaa${S.playersUpdated ? ' · tilanne ' + new Date(S.playersUpdated).toLocaleDateString('fi-FI') : ''}` : S.playersSource === 'imported' ? `Tuotu data · ${S.players.length} pelaajaa` : 'Ei pelaajadataa'}${S.enriching ? ' · haetaan kansallisuuksia…' : ''}</div>
+      <div class="sub">${S.playersSource === 'understat' ? `Haettu FotMobista · ${S.players.length} pelaajaa${S.playersUpdated ? ' · ' + new Date(S.playersUpdated).toLocaleString('fi-FI', { dateStyle: 'short', timeStyle: 'short' }) : ''}${S.playersPartial ? ' · osittain' : ''}` : S.playersSource === 'bundled' ? `Mukana tuleva Understat-data · ${S.players.length} pelaajaa${S.playersUpdated ? ' · tilanne ' + new Date(S.playersUpdated).toLocaleDateString('fi-FI') : ''}` : S.playersSource === 'imported' ? `Tuotu data · ${S.players.length} pelaajaa` : 'Ei pelaajadataa'}${S.enriching ? ' · haetaan kansallisuuksia…' : ''}</div>
       <div class="btns" style="margin-top:8px"><button class="ghost" data-act="updplayers" ${S.updatingPlayers ? 'disabled' : ''}>${S.updatingPlayers ? 'Haetaan…' : '⟳ Päivitä pelaajadata'}</button><button class="ghost" data-act="import">Tuo JSON…</button><button class="ghost" data-act="export">Vie JSON…</button><button class="ghost" data-act="reset">Palauta mukana tuleva data</button></div>
-      <div class="hint">Päivitys hakee kausitilastot ja ottelukohtaiset laukaukset Understatista (viisi suurta sarjaa). Ensimmäinen haku kestää hetken, koska jokaisen ottelun laukaukset haetaan; sen jälkeen haetaan vain uudet ottelut. Päivitä-painike hakee pelaajadatan automaattisesti, kun edellisestä hausta on yli 6 tuntia. Tuotua dataa ei korvata automaattisesti.</div>
+      <div class="hint">Päivitys hakee kausitilastot ja ottelukohtaiset laukaukset FotMobista (viisi suurta sarjaa ja MLS; xG, laukausten sijainti ja rangaistusalueen ulkopuoliset laukaukset). Cup-sarjat haetaan ESPN:stä. Ensimmäinen haku kestää hetken, koska jokaisen ottelun tiedot haetaan; sen jälkeen haetaan vain uudet ottelut. Valitun sarjan voi päivittää erikseen. Päivitä-painike hakee pelaajadatan automaattisesti, kun edellisestä hausta on yli 6 tuntia. Tuotua dataa ei korvata automaattisesti.</div>
       ${S.message ? `<div class="msg">${esc(S.message)}</div>` : ''}</div>
     <hr>
     <div><h3>Sovelluksen kuvake</h3>
