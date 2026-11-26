@@ -196,8 +196,27 @@ function normalizePlayers(arr) {
     position: POSITIONS.includes(p.position) ? p.position : 'Keskikenttä',
     appearances: num(p.appearances), goals: num(p.goals), shots: num(p.shots),
     shotsOnTarget: num(p.shotsOnTarget), shotsOutsideBox: num(p.shotsOutsideBox),
-    shotsOnTargetOutsideBox: num(p.shotsOnTargetOutsideBox)
+    shotsOnTargetOutsideBox: num(p.shotsOnTargetOutsideBox),
+    ...(p.xG != null ? { xG: Number(p.xG) || 0 } : {}),
+    ...(p.minutes != null ? { minutes: num(p.minutes) } : {})
   }));
+}
+
+// Lähteen vaihtuessa pelaaja-id muuttuu (Understat -> FotMob): siirrä tähdet ja kansallisuudet nimen perusteella.
+function migrateByName(oldPlayers, newPlayers) {
+  const nk = (p) => `${p.league}|${tkey(p.name)}`;
+  const byName = new Map();
+  newPlayers.forEach((p) => byName.set(nk(p), p.id));
+  const newIds = new Set(newPlayers.map((p) => p.id));
+  let moved = 0;
+  oldPlayers.forEach((o) => {
+    if (newIds.has(o.id)) return;
+    const nid = byName.get(nk(o));
+    if (!nid) return;
+    if (S.ratings[o.id] && !S.ratings[nid]) { S.ratings[nid] = S.ratings[o.id]; moved++; }
+    if (S.nationalities && S.nationalities[o.id] && !S.nationalities[nid]) S.nationalities[nid] = S.nationalities[o.id];
+  });
+  if (moved) persistRatings();
 }
 
 // -- football-data.org --
@@ -729,7 +748,9 @@ async function updatePlayers(scope = null) {
   if (understatOk) res.players.forEach((p) => espnLeagues.add(p.league));
   const kept = S.players.filter((p) => !espnLeagues.has(p.league)
     && (scoped ? true : (lost.has(p.league) || ESPN_PLAYER_LEAGUES.includes(p.league) || p.league === 'MLS')));
+  const oldPlayers = S.players;
   S.players = normalizePlayers([...(understatOk ? res.players : []), ...kept, ...espn, ...asa]);
+  migrateByName(oldPlayers, S.players);
   const fellBack = [...lost].filter((c) => espnLeagues.has(c));
   const partial = lost.size > 0;
   S.playersSource = 'understat'; S.playersPartial = partial; S.playersUpdated = new Date().toISOString();

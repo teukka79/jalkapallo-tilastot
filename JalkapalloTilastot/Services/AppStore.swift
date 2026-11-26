@@ -665,13 +665,33 @@ final class AppStore {
         await updatePlayers()
     }
 
+    /// Lähteen vaihtuessa pelaaja-id muuttuu: siirtää tähdet vanhalta id:ltä uudelle saman sarjan ja nimen pelaajalle.
+    private func migrateRatings(from old: [Player], to new: [Player]) {
+        let newIds = Set(new.map(\.id))
+        var byName: [String: String] = [:]
+        for p in new { byName["\(p.league)|\(p.name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil))"] = p.id }
+        var changed = false
+        for o in old where !newIds.contains(o.id) {
+            guard let stars = ratings[o.id],
+                  let nid = byName["\(o.league)|\(o.name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil))"],
+                  ratings[nid] == nil else { continue }
+            ratings[nid] = stars
+            changed = true
+        }
+        if changed, let data = try? JSONEncoder().encode(ratings) {
+            UserDefaults.standard.set(data, forKey: Keys.ratings)
+        }
+    }
+
     /// Korvaa yhden sarjan pelaajat skriptin tuloksella ja säilyttää muut sarjat.
     private func mergePlayers(data: Data, league: League) throws {
         let decoded = try JSONDecoder().decode([Player].self, from: data).filter { $0.league == league.rawValue }
         guard !decoded.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
         if playersAreSample { players = [] }
+        let old = players.filter { $0.league == league.rawValue }
         players.removeAll { $0.league == league.rawValue }
         players.append(contentsOf: decoded)
+        migrateRatings(from: old, to: decoded)
         playersAreSample = false
         if let out = try? JSONEncoder().encode(players) {
             try? out.write(to: AppStore.playersFileURL, options: .atomic)
@@ -1095,7 +1115,9 @@ final class AppStore {
     func importPlayers(data: Data) throws {
         let decoded = try JSONDecoder().decode([Player].self, from: data)
         guard !decoded.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+        let old = players
         players = decoded
+        migrateRatings(from: old, to: decoded)
         playersAreSample = false
         try? data.write(to: AppStore.playersFileURL, options: .atomic)
     }

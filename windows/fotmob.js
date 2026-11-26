@@ -134,7 +134,7 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
   for (const [code, leagueId] of LEAGUES) {
     if (only && code !== only) continue;
     try {
-      onProgress({ text: `Haetaan ${code}: ottelulista…` });
+      onProgress({ text: `FotMob: ${code} ottelulista…` });
       const fixtures = await loadFixtures(getText, leagueId, seasonWindow(code, seasonYear, now));
       if (!fixtures.length) throw new Error('otteluita ei löytynyt');
       const records = new Map();
@@ -152,7 +152,7 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
           fetchedMatches++;
         } catch { missing++; }
         done++;
-        onProgress({ text: `Haetaan ${code}: ottelut ${done}/${todo.length}` });
+        onProgress({ text: `FotMob: ${code} ottelut ${done}/${todo.length}` });
       });
       if (!records.size) throw new Error('yhtään ottelua ei saatu luettua');
       if (missing > todo.length / 2) throw new Error(`${missing} ottelun haku epäonnistui`);
