@@ -758,6 +758,8 @@ async function updatePlayers(scope = null) {
   await window.api.savePlayers(S.players, partial ? 'understat-partial' : 'understat');
   if (fellBack.length) S.playersNote = `Laukaustilastojen lähteet (FotMob, Understat) eivät vastanneet (${why}). ${fellBack.join(', ')} haettiin ESPN:stä: xG ja rangaistusalueen ulkopuoliset laukaukset puuttuvat.`;
   else if (lost.size) S.playersNote = `Osa sarjoista jäi päivittämättä: ${failed.map((f) => `${f.league} (${f.error})`).join(', ')}. Yritetään uudelleen seuraavalla päivityksellä.`;
+  const miss = Object.entries((res && res.missing) || {}).filter(([, n]) => n > 0);
+  if (!S.playersNote && miss.length) S.playersNote = `Joitakin otteluita ei saatu haettua: ${miss.map(([l, n]) => `${l} ${n}`).join(', ')}. Paina Päivitä uudelleen, niin ne haetaan.`;
   render();
   enrichNationalities();
   loadMatches();

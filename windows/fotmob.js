@@ -129,6 +129,7 @@ const r3 = (n) => Math.round(n * 1000) / 1000;
 async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = () => {}, only = null, concurrency = 4, now = new Date() }) {
   const players = [], shotsOut = {}, matchesOut = {}, failed = [];
   let fetchedMatches = 0;
+  const missingByLeague = {};
   const seasonYear = year != null ? year : (now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1);
 
   for (const [code, leagueId] of LEAGUES) {
@@ -143,17 +144,32 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
         const cached = cacheGet(f.id);
         if (cached) records.set(f.id, cached); else todo.push(f);
       }
-      let done = 0, missing = 0;
+      let done = 0;
+      let failedMatches = [];
+      const fetchOne = async (f) => {
+        const rec = parseMatch(nextData(await getText('https://www.fotmob.com' + f.url)).props.pageProps);
+        cacheSet(f.id, rec);
+        records.set(f.id, rec);
+        fetchedMatches++;
+      };
       await pool(todo, concurrency, async (f) => {
-        try {
-          const rec = parseMatch(nextData(await getText('https://www.fotmob.com' + f.url)).props.pageProps);
-          cacheSet(f.id, rec);
-          records.set(f.id, rec);
-          fetchedMatches++;
-        } catch { missing++; }
+        try { await fetchOne(f); } catch { failedMatches.push(f); }
         done++;
         onProgress({ text: `FotMob: ${code} ottelut ${done}/${todo.length}` });
       });
+      // Uusintakierrokset yksi kerrallaan ja viiveellä (nopeusrajoitukset)
+      for (let pass = 1; pass <= 3 && failedMatches.length; pass++) {
+        const again = failedMatches; failedMatches = [];
+        let n = 0;
+        for (const f of again) {
+          await new Promise((r) => setTimeout(r, 600 * pass));
+          try { await fetchOne(f); } catch { failedMatches.push(f); }
+          n++;
+          onProgress({ text: `FotMob: ${code} uusinta ${pass}/3 · ${n}/${again.length}` });
+        }
+      }
+      const missing = failedMatches.length;
+      missingByLeague[code] = missing;
       if (!records.size) throw new Error('yhtään ottelua ei saatu luettua');
       if (missing > todo.length / 2) throw new Error(`${missing} ottelun haku epäonnistui`);
 
@@ -219,7 +235,7 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
   }
   const known = new Set(players.map((p) => p.id));
   for (const id of Object.keys(shotsOut)) if (!known.has(id)) delete shotsOut[id];
-  return { players, shots: shotsOut, matches: matchesOut, failed, fetchedMatches };
+  return { players, shots: shotsOut, matches: matchesOut, failed, fetchedMatches, missing: missingByLeague };
 }
 
 module.exports = { fetchPlayers, parseMatch, nextData, loadFixtures, seasonWindow, LEAGUES };
