@@ -401,7 +401,7 @@ async function fetchViaFotmob(send, scope) {
   const matches = mergeByLeague(getMatches(), r.matches, refreshed);
   fs.writeFileSync(matchesFile(), JSON.stringify({ matches }));
   matchesMem = matches;
-  return { ok: true, players: r.players, failed: r.failed, missing: r.missing, source: 'fotmob' };
+  return { ok: true, players: r.players, failed: r.failed, missing: r.missing, counts: r.counts, source: 'fotmob' };
 }
 
 let playersFetch = null;

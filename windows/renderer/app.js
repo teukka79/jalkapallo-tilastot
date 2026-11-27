@@ -760,6 +760,8 @@ async function updatePlayers(scope = null) {
   else if (lost.size) S.playersNote = `Osa sarjoista jäi päivittämättä: ${failed.map((f) => `${f.league} (${f.error})`).join(', ')}. Yritetään uudelleen seuraavalla päivityksellä.`;
   const miss = Object.entries((res && res.missing) || {}).filter(([, n]) => n > 0);
   if (!S.playersNote && miss.length) S.playersNote = `Joitakin otteluita ei saatu haettua: ${miss.map(([l, n]) => `${l} ${n}`).join(', ')}. Paina Päivitä uudelleen, niin ne haetaan.`;
+  const cnt = Object.entries((res && res.counts) || {});
+  if (!S.playersNote && cnt.length) S.playersNote = `FotMob: ${cnt.map(([l, c]) => `${l} ${c.read}/${c.fixtures} ottelua (${c.first} – ${c.last})`).join(', ')}.`;
   render();
   enrichNationalities();
   loadMatches();

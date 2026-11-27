@@ -130,6 +130,7 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
   const players = [], shotsOut = {}, matchesOut = {}, failed = [];
   let fetchedMatches = 0;
   const missingByLeague = {};
+  const countsByLeague = {};
   const seasonYear = year != null ? year : (now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1);
 
   for (const [code, leagueId] of LEAGUES) {
@@ -170,6 +171,7 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
       }
       const missing = failedMatches.length;
       missingByLeague[code] = missing;
+      countsByLeague[code] = { fixtures: fixtures.length, read: records.size, cached: fixtures.length - todo.length, first: fixtures[0].date, last: fixtures[fixtures.length - 1].date };
       if (!records.size) throw new Error('yhtään ottelua ei saatu luettua');
       if (missing > todo.length / 2) throw new Error(`${missing} ottelun haku epäonnistui`);
 
@@ -235,7 +237,7 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
   }
   const known = new Set(players.map((p) => p.id));
   for (const id of Object.keys(shotsOut)) if (!known.has(id)) delete shotsOut[id];
-  return { players, shots: shotsOut, matches: matchesOut, failed, fetchedMatches, missing: missingByLeague };
+  return { players, shots: shotsOut, matches: matchesOut, failed, fetchedMatches, missing: missingByLeague, counts: countsByLeague };
 }
 
 module.exports = { fetchPlayers, parseMatch, nextData, loadFixtures, seasonWindow, LEAGUES };
