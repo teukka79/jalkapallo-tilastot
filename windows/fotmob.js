@@ -143,12 +143,22 @@ async function fetchPlayers({ getText, cacheGet, cacheSet, year, onProgress = ()
       const todo = [];
       for (const f of fixtures) {
         const cached = cacheGet(f.id);
-        if (cached) records.set(f.id, cached); else todo.push(f);
+        if (cached && String(cached.id) === String(f.id)) records.set(f.id, cached); else todo.push(f);
       }
       let done = 0;
       let failedMatches = [];
       const fetchOne = async (f) => {
-        const rec = parseMatch(nextData(await getText('https://www.fotmob.com' + f.url)).props.pageProps);
+        // FotMob ohittaa osoitteen #id-osan: varmista, että sivu on juuri pyydetty ottelu
+        const base = 'https://www.fotmob.com' + String(f.url).split('#')[0];
+        let rec = null, lastErr = null;
+        for (const url of [`${base}?matchId=${f.id}`, `https://www.fotmob.com/match/${f.id}`]) {
+          try {
+            const r = parseMatch(nextData(await getText(url)).props.pageProps);
+            if (String(r.id) === String(f.id)) { rec = r; break; }
+            lastErr = new Error('väärä ottelu ' + r.id);
+          } catch (e) { lastErr = e; }
+        }
+        if (!rec) throw lastErr || new Error('ottelua ei saatu');
         cacheSet(f.id, rec);
         records.set(f.id, rec);
         fetchedMatches++;

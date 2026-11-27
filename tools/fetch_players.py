@@ -412,6 +412,33 @@ def fm_parse(page: dict) -> dict:
             "home": home["name"], "away": away["name"], "shots": shots, "players": players}
 
 
+def fm_fetch_match(fixture: dict) -> dict:
+    """Hakee ottelun ja varmistaa, että sivu on juuri pyydetty ottelu (FotMob ohittaa osoitteen #id-osan
+    ja voi muuten palauttaa saman joukkueparin toisen ottelun)."""
+    base = "https://www.fotmob.com" + fixture["url"].split("#")[0]
+    last = None
+    for url in (f"{base}?matchId={fixture['id']}", f"https://www.fotmob.com/match/{fixture['id']}"):
+        try:
+            record = fm_parse(fm_next_data(fm_get(url)))
+        except Exception as exc:
+            last = exc
+            continue
+        if record["id"] == str(fixture["id"]):
+            return record
+        last = ValueError(f"väärä ottelu ({record['id']})")
+    raise last or ValueError("ottelua ei saatu")
+
+
+def fm_cached(cache: Path, fixture: dict):
+    """Välimuistin ottelu, jos tiedosto on olemassa ja sen id täsmää; muuten None."""
+    path = cache / f"{fixture['id']}.json"
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if record.get("id") == str(fixture["id"]) else None
+
+
 def load_fotmob(args):
     wanted = None
     if args.leagues:
@@ -434,14 +461,14 @@ def load_fotmob(args):
     if not tasks:
         sys.exit("FotMob ei vastannut: otteluita ei löytynyt")
 
-    missing = [t for t in tasks if not (cache / f"{t[1]['id']}.json").exists()]
+    missing = [t for t in tasks if fm_cached(cache, t[1]) is None]
     if args.max_new and len(missing) > args.max_new:
         missing = sorted(missing, key=lambda t: t[1]["date"], reverse=True)[: args.max_new]
     total, failures = len(missing), 0
     for i, (name, fixture) in enumerate(missing, 1):
         print(f"[{i}/{total}] FotMob: {fixture['date']} {fixture['url'].split('/')[2][:40]}", flush=True)
         try:
-            record = fm_parse(fm_next_data(fm_get("https://www.fotmob.com" + fixture["url"])))
+            record = fm_fetch_match(fixture)
             (cache / f"{fixture['id']}.json").write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
         except Exception as exc:
             failures += 1
@@ -452,10 +479,8 @@ def load_fotmob(args):
 
     rows, shot_rows, parsed = [], [], 0
     for name, fixture in tasks:
-        path = cache / f"{fixture['id']}.json"
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        record = fm_cached(cache, fixture)
+        if record is None:
             continue
         game = f"{record['date']} {record['home']}-{record['away']}"
         for p in record["players"]:
